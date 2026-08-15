@@ -20,6 +20,37 @@ diff -ruN gapguard_orig/GapGuardAndroid/app/build.gradle gapguard_patchtest/GapG
      }
  
      buildTypes {
+diff -ruN gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/EventLog.java gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/EventLog.java
+--- gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/EventLog.java	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/EventLog.java	2026-08-15 17:22:32.625851646 +0000
+@@ -19,6 +19,16 @@
+         return new File(c.getFilesDir(), FILE_NAME);
+     }
+ 
++    static String isoTimestamp(Date date) {
++        SimpleDateFormat base = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US);
++        SimpleDateFormat zone = new SimpleDateFormat("Z", Locale.US);
++        String rawZone = zone.format(date);
++        if (rawZone.length() == 5) {
++            rawZone = rawZone.substring(0, 3) + ":" + rawZone.substring(3);
++        }
++        return base.format(date) + rawZone;
++    }
++
+     public static void append(Context c, String event, String note) {
+         synchronized (LOCK) {
+             try {
+@@ -29,8 +39,8 @@
+                         out.write("timestamp,event,remaining_mb,used_mb,bookings,note\n"
+                                 .getBytes(StandardCharsets.UTF_8));
+                     }
+-                    String ts = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.GERMANY)
+-                            .format(new Date());
++                    Date now = new Date();
++                    String ts = isoTimestamp(now);
+                     double rem = GapMath.bytesToMb(GapPrefs.getRemainingBytes(c));
+                     double used = GapMath.bytesToMb(GapPrefs.getUsedBytes(c));
+                     String cleanNote = note == null ? "" : note.replace("\"", "\"\"");
 diff -ruN gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java
 --- gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java	2026-08-15 14:18:38.000000000 +0000
 +++ gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java	2026-08-15 17:17:03.376106612 +0000
