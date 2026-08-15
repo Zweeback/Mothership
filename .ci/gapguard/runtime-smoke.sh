@@ -17,6 +17,13 @@ dump_ui() {
   adb pull /sdcard/window.xml /tmp/window.xml >/dev/null
 }
 
+scroll_to_top() {
+  for _ in $(seq 1 8); do
+    adb shell input swipe 540 700 540 1900 220 >/dev/null
+  done
+  sleep 1
+}
+
 find_text_coords() {
   local wanted="$1"
   python3 - "$wanted" <<'PY'
@@ -38,7 +45,7 @@ PY
 tap_text() {
   local wanted="$1"
   local tries=0
-  while [ "$tries" -lt 10 ]; do
+  while [ "$tries" -lt 12 ]; do
     dump_ui
     local coords
     if coords=$(find_text_coords "$wanted"); then
@@ -46,12 +53,12 @@ tap_text() {
       sleep 1
       return 0
     fi
-    adb shell input swipe 540 1800 540 700 350
+    adb shell input swipe 540 1800 540 700 300 >/dev/null
     sleep 1
     tries=$((tries+1))
   done
   echo "Could not find/tap text: $wanted" >&2
-  cat /tmp/window.xml >&2
+  cp /tmp/window.xml "/tmp/gapguard-window-failure.xml" || true
   return 1
 }
 
@@ -76,32 +83,31 @@ PY
   sleep 1
 }
 
-# Initial launch/UI defaults.
+# Verify the first actionable control rather than relying on a decorative title in the accessibility tree.
+scroll_to_top
 dump_ui
-grep -q 'text="Gap Guard"' /tmp/window.xml
+cp /tmp/window.xml /tmp/gapguard-window-initial.xml
+grep -q 'text="Restwert übernehmen"' /tmp/window.xml
 
-# Ensure default threshold values are real EditText values, not mere hints.
+# Ensure default threshold values are actual EditText values, not merely hints.
 for wanted in 850 250; do
   found=0
-  for _ in $(seq 1 10); do
+  for _ in $(seq 1 12); do
     dump_ui
     if grep -q "text=\"$wanted\"" /tmp/window.xml; then
       found=1
       break
     fi
-    adb shell input swipe 540 1800 540 700 350
+    adb shell input swipe 540 1800 540 700 300 >/dev/null
     sleep 1
   done
   test "$found" -eq 1
-  adb shell input keyevent KEYCODE_HOME >/dev/null || true
-  adb shell am start -W -n "$PKG/.MainActivity" >/dev/null
-  sleep 1
 done
 
-# Return to top and calibrate at zero. This is deterministic even if the emulator has no mobile counter.
-adb shell input keyevent KEYCODE_HOME >/dev/null || true
-adb shell am start -W -n "$PKG/.MainActivity" >/dev/null
-sleep 1
+echo 'PASS: default warning thresholds rendered as real values'
+
+# Calibrate at zero and start the user-controlled foreground service.
+scroll_to_top
 tap_first_edit
 adb shell input text 0
 adb shell input keyevent KEYCODE_BACK
@@ -110,20 +116,16 @@ tap_text 'Restwert übernehmen'
 tap_text 'Tracking starten'
 sleep 3
 
-# The foreground service itself must be alive after a user-started launch.
 adb shell dumpsys activity services "$PKG" | tee /tmp/gapguard-services.txt
 grep -q 'TrackerService' /tmp/gapguard-services.txt
 
-# Capture runtime evidence. Some emulators have no mobile interface, so carrier-counter-specific
-# depletion is allowed to be unavailable here and is separately covered by deterministic logic tests.
+# Capture state. Android emulators may not expose a mobile radio counter; that branch is recorded, not faked.
 adb shell run-as "$PKG" cat files/events.csv 2>/dev/null | tr -d '\r' | tee /tmp/gapguard-runtime-events.csv || true
 adb shell run-as "$PKG" cat shared_prefs/gap_guard_state.xml | tr -d '\r' | tee /tmp/gapguard-runtime-prefs.xml
 grep -q 'name="tracker_running" value="true"' /tmp/gapguard-runtime-prefs.xml
 
 if grep -q 'estimated_depleted' /tmp/gapguard-runtime-events.csv; then
   echo 'RUNTIME_MOBILE_COUNTER=available' | tee /tmp/gapguard-runtime-capability.txt
-
-  # If the emulator exposes mobile counters, exercise the complete gap -> +1 GB transition.
   tap_text '+1 GB wurde erfolgreich gebucht'
   tap_text 'Ja, erfolgreich'
   sleep 2
@@ -137,10 +139,8 @@ else
   echo 'RUNTIME_MOBILE_COUNTER=unavailable_on_emulator' | tee /tmp/gapguard-runtime-capability.txt
 fi
 
-# Recalibration while service is still running must not falsify tracker state.
-adb shell input keyevent KEYCODE_HOME >/dev/null || true
-adb shell am start -W -n "$PKG/.MainActivity" >/dev/null
-sleep 1
+# Recalibration while tracking must preserve the running-state flag.
+scroll_to_top
 tap_text 'Restwert übernehmen'
 sleep 1
 adb shell run-as "$PKG" cat shared_prefs/gap_guard_state.xml | tr -d '\r' | tee /tmp/gapguard-runtime-prefs-after-recal.xml
