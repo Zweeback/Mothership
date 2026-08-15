@@ -24,6 +24,12 @@ jobs:
           mkdir -p /tmp/gapguard-src
           unzip -q /tmp/GapGuardAndroid.zip -d /tmp/gapguard-src
 
+      - name: Patch project to runner-available Android API 36
+        run: |
+          sed -i 's/compileSdk = 37/compileSdk = 36/' /tmp/gapguard-src/GapGuardAndroid/app/build.gradle
+          sed -i 's/targetSdk = 37/targetSdk = 36/' /tmp/gapguard-src/GapGuardAndroid/app/build.gradle
+          grep -E 'compileSdk|targetSdk|minSdk' /tmp/gapguard-src/GapGuardAndroid/app/build.gradle
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -34,7 +40,7 @@ jobs:
       - name: Install Android SDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-37" "build-tools;36.0.0"
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
