@@ -17,6 +17,7 @@ env:
   GODOT_VERSION: '4.7.1'
   PROJECT_DIR: godot/dortmund
   CITY_SHA256: 2dc4b395603448feb2a27eca2046f2aa5c20d217b2df75fa8512a64b7b3f8327
+  DRIVE_STAGE_FILE_ID: 17s1OyXXvZabxDYHdK_RfGwvhkjL5cIBv
 
 jobs:
   android:
@@ -37,18 +38,34 @@ jobs:
           mkdir -p "$PROJECT_DIR/assets"
           ASSET="$PROJECT_DIR/assets/dortmund.glb"
 
-          # Git LFS is preferred. If the object is not in the checkout, use the
-          # persistent GitHub Release asset instead.
-          if [ ! -f "$ASSET" ] || [ "$(stat -c%s "$ASSET" 2>/dev/null || echo 0)" -lt 100000000 ]; then
+          # 1) Git LFS checkout.
+          if [ -f "$ASSET" ] && [ "$(stat -c%s "$ASSET")" -ge 100000000 ]; then
+            echo 'Using Git LFS asset.'
+          else
             rm -f "$ASSET"
-            if gh release view dortmund-assets-v1 >/dev/null 2>&1; then
-              gh release download dortmund-assets-v1 --pattern 'dortmund.glb' --dir "$PROJECT_DIR/assets" --clobber
+          fi
+
+          # 2) Persistent GitHub Release asset.
+          if [ ! -f "$ASSET" ] && gh release view dortmund-assets-v1 >/dev/null 2>&1; then
+            gh release download dortmund-assets-v1 --pattern 'dortmund.glb' --dir "$PROJECT_DIR/assets" --clobber
+          fi
+
+          # 3) One-time Drive staging ZIP. This works after the staged Drive file
+          #    is set to "Anyone with the link". The downloaded ZIP contains
+          #    assets/dortmund.glb and is only a transport container.
+          if [ ! -f "$ASSET" ]; then
+            python -m pip install --quiet gdown
+            if gdown "https://drive.google.com/uc?id=${DRIVE_STAGE_FILE_ID}" -O /tmp/dortmund-stage.zip; then
+              unzip -p /tmp/dortmund-stage.zip assets/dortmund.glb > "$ASSET"
             fi
           fi
 
-          if [ ! -f "$ASSET" ]; then
+          if [ ! -f "$ASSET" ] || [ "$(stat -c%s "$ASSET" 2>/dev/null || echo 0)" -lt 100000000 ]; then
             echo '::error::Canonical dortmund.glb is missing.'
-            echo 'One-time setup: attach dortmund.glb to GitHub Release tag dortmund-assets-v1, or push it through Git LFS.'
+            echo 'One-time setup options:'
+            echo '  A) attach dortmund.glb to GitHub Release tag dortmund-assets-v1; or'
+            echo '  B) push through Git LFS; or'
+            echo '  C) set Drive file 17s1OyXXvZabxDYHdK_RfGwvhkjL5cIBv to Anyone-with-link.'
             exit 21
           fi
 
