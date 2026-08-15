@@ -1,0 +1,104 @@
+name: Build Dortmund Godot APK v2
+
+on:
+  push:
+    branches: [build/dortmund-godot-apk]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35"
+
+      - name: Restore project and enable Android texture compression
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re, base64, zipfile, io
+          workflow = Path('.github/workflows/build-dortmund-apk.yml').read_text()
+          m = re.search(r"echo '([A-Za-z0-9+/=]+)' \| base64 -d > /tmp/game\.zip", workflow)
+          if not m:
+              raise SystemExit('Embedded game archive not found')
+          data = base64.b64decode(m.group(1))
+          with zipfile.ZipFile(io.BytesIO(data)) as z:
+              z.extractall('game')
+          p = Path('game/project.godot')
+          s = p.read_text()
+          key = 'textures/vram_compression/import_etc2_astc=true'
+          if key not in s:
+              marker = '[rendering]\n'
+              if marker not in s:
+                  s += '\n[rendering]\n' + key + '\n'
+              else:
+                  s = s.replace(marker, marker + key + '\n', 1)
+              p.write_text(s)
+          Path('game/build').mkdir(exist_ok=True)
+          print('ETC2/ASTC enabled:', key in p.read_text())
+          PY
+
+      - name: Install Godot 4.7.1 and export templates
+        shell: bash
+        run: |
+          curl -L --retry 4 -o /tmp/godot.zip "https://downloads.godotengine.org/?flavor=stable&platform=linux.64&slug=linux.x86_64.zip&version=4.7.1"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          sudo mv /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 /usr/local/bin/godot
+          curl -L --retry 4 -o /tmp/templates.tpz "https://downloads.godotengine.org/?flavor=stable&platform=templates&slug=export_templates.tpz&version=4.7.1"
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.7.1.stable"
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          cp -a /tmp/templates/templates/. "$HOME/.local/share/godot/export_templates/4.7.1.stable/"
+
+      - name: Configure Android paths and debug signing
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.config/godot" "$HOME/.android"
+          JAVA_HOME_REAL="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+          ANDROID_SDK_REAL="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          cat > "$HOME/.config/godot/editor_settings-4.7.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/java_sdk_path = "$JAVA_HOME_REAL"
+          export/android/android_sdk_path = "$ANDROID_SDK_REAL"
+          EOF
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
+          fi
+
+      - name: Import and smoke test
+        run: |
+          godot --headless --editor --path game --quit
+          godot --headless --path game --quit-after 2
+
+      - name: Export installable APK
+        run: |
+          godot --headless --path game --export-debug "Android" "$GITHUB_WORKSPACE/DortmundGameMap.apk"
+          test -s "$GITHUB_WORKSPACE/DortmundGameMap.apk"
+          ls -lh "$GITHUB_WORKSPACE/DortmundGameMap.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DortmundGameMap-APK
+          path: DortmundGameMap.apk
+          if-no-files-found: error
