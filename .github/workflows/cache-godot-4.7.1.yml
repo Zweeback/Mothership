@@ -1,0 +1,26 @@
+name: Cache Godot 4.7.1 Editor
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cache-godot-4.7.1.yml'
+  workflow_dispatch:
+
+jobs:
+  cache-editor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Godot 4.7.1 Linux x86_64
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 -o godot.zip https://github.com/godotengine/godot/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip
+          unzip -q godot.zip -d godot
+          chmod +x godot/Godot_v4.7.1-stable_linux.x86_64
+          godot/Godot_v4.7.1-stable_linux.x86_64 --version
+      - name: Upload Godot editor
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-4.7.1-linux-x86_64
+          path: godot/Godot_v4.7.1-stable_linux.x86_64
+          compression-level: 0
+          retention-days: 30
