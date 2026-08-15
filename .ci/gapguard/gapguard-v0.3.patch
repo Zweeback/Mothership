@@ -1,0 +1,337 @@
+diff -ruN gapguard_orig/GapGuardAndroid/app/build.gradle gapguard_patchtest/GapGuardAndroid/app/build.gradle
+--- gapguard_orig/GapGuardAndroid/app/build.gradle	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/app/build.gradle	2026-08-15 17:17:03.375939514 +0000
+@@ -4,14 +4,14 @@
+ 
+ android {
+     namespace = 'de.bentropie.gapguard'
+-    compileSdk = 37
++    compileSdk = 36
+ 
+     defaultConfig {
+         applicationId = 'de.bentropie.gapguard'
+         minSdk = 23
+-        targetSdk = 37
+-        versionCode = 2
+-        versionName = '0.2.0'
++        targetSdk = 36
++        versionCode = 3
++        versionName = '0.3.0'
+     }
+ 
+     buildTypes {
+diff -ruN gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java
+--- gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapMath.java	2026-08-15 17:17:03.376106612 +0000
+@@ -6,7 +6,12 @@
+     private GapMath() {}
+ 
+     public static long remainingBytes(long baseRemaining, long bookedBytes, long usedBytes) {
+-        return baseRemaining + bookedBytes - usedBytes;
++        return Math.max(0L, baseRemaining + bookedBytes - usedBytes);
++    }
++
++    public static long billableDelta(long remainingBefore, long counterDelta) {
++        if (remainingBefore <= 0L || counterDelta <= 0L) return 0L;
++        return Math.min(remainingBefore, counterDelta);
+     }
+ 
+     public static double bytesToMb(long bytes) {
+diff -ruN gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapPrefs.java gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapPrefs.java
+--- gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapPrefs.java	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/GapPrefs.java	2026-08-15 17:17:03.376136907 +0000
+@@ -24,7 +24,10 @@
+                 .putLong("ema_bps_x1000", 0L)
+                 .putBoolean("warn_fired", false)
+                 .putBoolean("urgent_fired", false)
+-                .putBoolean("tracker_running", false)
++                .putBoolean("depleted_fired", false)
++                .putLong("last_depleted_ms", 0L)
++                .putLong("last_gap_ms", 0L)
++                .putLong("last_booking_ms", 0L)
+                 .putString("last_error", "")
+                 .apply();
+     }
+@@ -42,44 +45,34 @@
+         );
+     }
+ 
+-    public static long getUsedBytes(Context c) {
+-        return p(c).getLong("used_bytes", 0L);
+-    }
+-
+-    public static int getBookings(Context c) {
+-        return p(c).getInt("bookings", 0);
+-    }
+-
+-    public static double getEmaBps(Context c) {
+-        return p(c).getLong("ema_bps_x1000", 0L) / 1000.0;
+-    }
+-
+-    public static long getLastCounter(Context c) {
+-        return p(c).getLong("last_counter", -1L);
+-    }
+-
+-    public static long getLastSampleMs(Context c) {
+-        return p(c).getLong("last_sample_ms", 0L);
+-    }
++    public static long getUsedBytes(Context c) { return p(c).getLong("used_bytes", 0L); }
++    public static int getBookings(Context c) { return p(c).getInt("bookings", 0); }
++    public static double getEmaBps(Context c) { return p(c).getLong("ema_bps_x1000", 0L) / 1000.0; }
++    public static long getLastCounter(Context c) { return p(c).getLong("last_counter", -1L); }
++    public static long getLastSampleMs(Context c) { return p(c).getLong("last_sample_ms", 0L); }
+ 
+     public static long applySample(Context c, long currentCounter, long nowMs) {
+         SharedPreferences sp = p(c);
+         long lastCounter = sp.getLong("last_counter", -1L);
+         long lastMs = sp.getLong("last_sample_ms", 0L);
+-        long delta = 0L;
++        long rawDelta = 0L;
+ 
+         if (lastCounter >= 0L && currentCounter >= lastCounter) {
+-            delta = currentCounter - lastCounter;
++            rawDelta = currentCounter - lastCounter;
+         }
+ 
+-        long used = sp.getLong("used_bytes", 0L) + Math.max(0L, delta);
++        long remainingBefore = GapMath.remainingBytes(
++                sp.getLong("base_remaining", 0L),
++                sp.getLong("booked_bytes", 0L),
++                sp.getLong("used_bytes", 0L));
++        long billableDelta = GapMath.billableDelta(remainingBefore, rawDelta);
++        long used = sp.getLong("used_bytes", 0L) + billableDelta;
++
+         double oldEma = sp.getLong("ema_bps_x1000", 0L) / 1000.0;
+         double instant = 0.0;
+-
+         if (lastMs > 0L && nowMs > lastMs) {
+-            instant = Math.max(0L, delta) / ((nowMs - lastMs) / 1000.0);
++            instant = Math.max(0L, rawDelta) / ((nowMs - lastMs) / 1000.0);
+         }
+-
+         double newEma = GapMath.ema(oldEma, instant);
+ 
+         sp.edit()
+@@ -89,27 +82,41 @@
+                 .putLong("ema_bps_x1000", Math.max(0L, (long) (newEma * 1000.0)))
+                 .putString("last_error", "")
+                 .apply();
++        return rawDelta;
++    }
+ 
+-        return delta;
++    public static void markDepleted(Context c, long nowMs) {
++        if (depletedFired(c)) return;
++        p(c).edit()
++                .putBoolean("depleted_fired", true)
++                .putLong("last_depleted_ms", nowMs)
++                .apply();
+     }
+ 
+-    public static void markBooking(Context c) {
++    public static void markBooking(Context c, long currentCounter, long nowMs) {
+         SharedPreferences sp = p(c);
+         long booked = sp.getLong("booked_bytes", 0L) + GapMath.ONE_GB;
+         int bookings = sp.getInt("bookings", 0) + 1;
++        long depletedMs = sp.getLong("last_depleted_ms", 0L);
++        long gapMs = depletedMs > 0L && nowMs >= depletedMs ? nowMs - depletedMs : 0L;
+ 
+         sp.edit()
+                 .putLong("booked_bytes", booked)
+                 .putInt("bookings", bookings)
+-                .putLong("last_booking_ms", System.currentTimeMillis())
++                .putLong("last_booking_ms", nowMs)
++                .putLong("last_gap_ms", gapMs)
++                .putLong("last_counter", currentCounter)
++                .putLong("last_sample_ms", nowMs)
++                .putLong("ema_bps_x1000", 0L)
+                 .putBoolean("warn_fired", false)
+                 .putBoolean("urgent_fired", false)
++                .putBoolean("depleted_fired", false)
++                .putLong("last_depleted_ms", 0L)
+                 .apply();
+     }
+ 
+-    public static long getLastBookingMs(Context c) {
+-        return p(c).getLong("last_booking_ms", 0L);
+-    }
++    public static long getLastBookingMs(Context c) { return p(c).getLong("last_booking_ms", 0L); }
++    public static long getLastGapMs(Context c) { return p(c).getLong("last_gap_ms", 0L); }
+ 
+     public static double getWarnMb(Context c) {
+         return Double.longBitsToDouble(p(c).getLong(
+@@ -132,21 +139,15 @@
+ 
+     public static boolean warnFired(Context c) { return p(c).getBoolean("warn_fired", false); }
+     public static boolean urgentFired(Context c) { return p(c).getBoolean("urgent_fired", false); }
++    public static boolean depletedFired(Context c) { return p(c).getBoolean("depleted_fired", false); }
+     public static void setWarnFired(Context c, boolean v) { p(c).edit().putBoolean("warn_fired", v).apply(); }
+     public static void setUrgentFired(Context c, boolean v) { p(c).edit().putBoolean("urgent_fired", v).apply(); }
+ 
+-    public static boolean isTrackerRunning(Context c) {
+-        return p(c).getBoolean("tracker_running", false);
+-    }
+-
++    public static boolean isTrackerRunning(Context c) { return p(c).getBoolean("tracker_running", false); }
+     public static void setTrackerRunning(Context c, boolean running) {
+         p(c).edit().putBoolean("tracker_running", running).apply();
+     }
+-
+-    public static String getLastError(Context c) {
+-        return p(c).getString("last_error", "");
+-    }
+-
++    public static String getLastError(Context c) { return p(c).getString("last_error", ""); }
+     public static void setLastError(Context c, String error) {
+         p(c).edit().putString("last_error", error == null ? "" : error).apply();
+     }
+diff -ruN gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/MainActivity.java gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/MainActivity.java
+--- gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/MainActivity.java	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/MainActivity.java	2026-08-15 17:17:03.376356924 +0000
+@@ -39,6 +39,7 @@
+     private TextView rateValue;
+     private TextView etaValue;
+     private TextView bookingsValue;
++    private TextView gapValue;
+     private TextView serviceValue;
+     private TextView errorValue;
+     private EditText calibrationInput;
+@@ -104,12 +105,14 @@
+         rateValue = text("Verbrauchsrate: –", 16, false);
+         etaValue = text("ETA: –", 16, false);
+         bookingsValue = text("Nachbuchungen: 0", 16, false);
++        gapValue = text("Letzte Gap-Zeit: –", 16, false);
+         serviceValue = text("Tracker: aus", 16, false);
+         errorValue = text("", 13, false);
+         errorValue.setTextColor(Color.rgb(180, 30, 30));
+         metrics.addView(rateValue);
+         metrics.addView(etaValue);
+         metrics.addView(bookingsValue);
++        metrics.addView(gapValue);
+         metrics.addView(serviceValue);
+         metrics.addView(errorValue);
+         root.addView(metrics);
+@@ -138,8 +141,10 @@
+ 
+         LinearLayout thresholdCard = card();
+         thresholdCard.addView(text("3. Warnschwellen", 18, true));
+-        warnInput = input(String.format(Locale.US, "%.0f", GapPrefs.getWarnMb(this)));
+-        urgentInput = input(String.format(Locale.US, "%.0f", GapPrefs.getUrgentMb(this)));
++        warnInput = input("");
++        warnInput.setText(String.format(Locale.US, "%.0f", GapPrefs.getWarnMb(this)));
++        urgentInput = input("");
++        urgentInput.setText(String.format(Locale.US, "%.0f", GapPrefs.getUrgentMb(this)));
+         thresholdCard.addView(text("Frühe Warnung (MB)", 13, false));
+         thresholdCard.addView(warnInput);
+         thresholdCard.addView(text("Dringende Warnung (MB)", 13, false));
+@@ -188,7 +193,7 @@
+     private void calibrate() {
+         try {
+             double mb = parse(calibrationInput.getText().toString());
+-            if (mb < 0) throw new IllegalArgumentException();
++            if (!Double.isFinite(mb) || mb < 0) throw new IllegalArgumentException();
+ 
+             long counter = mobileCounter();
+             if (counter < 0L) counter = -1L;
+@@ -228,7 +233,8 @@
+         try {
+             double warn = parse(warnInput.getText().toString());
+             double urgent = parse(urgentInput.getText().toString());
+-            if (warn < 0 || urgent < 0 || urgent > warn) {
++            if (!Double.isFinite(warn) || !Double.isFinite(urgent) ||
++                    warn < 0 || urgent < 0 || urgent > warn) {
+                 toast("Dringend sollte kleiner/gleich der frühen Warnung sein.");
+                 return;
+             }
+@@ -251,8 +257,14 @@
+                 .setMessage("Nur bestätigen, wenn die Nachbuchung im offiziellen Portal wirklich erfolgreich abgeschlossen wurde.")
+                 .setNegativeButton("Abbrechen", null)
+                 .setPositiveButton("Ja, erfolgreich", (d, which) -> {
+-                    GapPrefs.markBooking(this);
+-                    EventLog.append(this, "booked_1gb", "manual official confirmation");
++                    long now = System.currentTimeMillis();
++                    long counter = mobileCounter();
++                    GapPrefs.markBooking(this, counter, now);
++                    long gapMs = GapPrefs.getLastGapMs(this);
++                    EventLog.append(this, "booked_1gb",
++                            gapMs > 0L
++                                    ? String.format(Locale.US, "manual official confirmation; gap_seconds=%.1f", gapMs / 1000.0)
++                                    : "manual official confirmation; no depletion timestamp");
+                     NotificationUtil.alert(
+                             this,
+                             "Gap Guard",
+@@ -301,6 +313,7 @@
+             rateValue.setText("Verbrauchsrate: –");
+             etaValue.setText("ETA: –");
+             bookingsValue.setText("Nachbuchungen: 0");
++            gapValue.setText("Letzte Gap-Zeit: –");
+         } else {
+             long rem = GapPrefs.getRemainingBytes(this);
+             double remMb = GapMath.bytesToMb(rem);
+@@ -315,6 +328,10 @@
+                     ? "ETA: –"
+                     : String.format(Locale.GERMANY, "ETA: %.1f min", eta));
+             bookingsValue.setText("Nachbuchungen: " + GapPrefs.getBookings(this));
++            long lastGap = GapPrefs.getLastGapMs(this);
++            gapValue.setText(lastGap > 0L
++                    ? String.format(Locale.GERMANY, "Letzte Gap-Zeit: %.1f min", lastGap / 60000.0)
++                    : "Letzte Gap-Zeit: –");
+ 
+             long lastBooking = GapPrefs.getLastBookingMs(this);
+             if (lastBooking > 0) {
+diff -ruN gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/TrackerService.java gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/TrackerService.java
+--- gapguard_orig/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/TrackerService.java	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/app/src/main/java/de/bentropie/gapguard/TrackerService.java	2026-08-15 17:17:03.376544583 +0000
+@@ -86,6 +86,18 @@
+         double urgent = GapPrefs.getUrgentMb(this);
+         double warn = GapPrefs.getWarnMb(this);
+ 
++        if (remBytes <= 0L && !GapPrefs.depletedFired(this)) {
++            long now = System.currentTimeMillis();
++            GapPrefs.markDepleted(this, now);
++            EventLog.append(this, "estimated_depleted",
++                    "Local quota estimate reached zero; gap timer started");
++            NotificationUtil.alert(
++                    this,
++                    "Gap Guard: 0 MB lokal geschätzt",
++                    "Gap-Timer läuft. Offiziellen Anbieterstatus prüfen.",
++                    4203);
++        }
++
+         if (remMb <= urgent && !GapPrefs.urgentFired(this)) {
+             GapPrefs.setUrgentFired(this, true);
+             EventLog.append(this, "urgent_threshold", "Lokale Schätzung");
+diff -ruN gapguard_orig/GapGuardAndroid/gradle.properties gapguard_patchtest/GapGuardAndroid/gradle.properties
+--- gapguard_orig/GapGuardAndroid/gradle.properties	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/gradle.properties	2026-08-15 17:17:03.376065300 +0000
+@@ -1,3 +1,2 @@
+ org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+-android.useAndroidX=false
+ android.nonTransitiveRClass=true
+diff -ruN gapguard_orig/GapGuardAndroid/logic-test/GapMathTest.java gapguard_patchtest/GapGuardAndroid/logic-test/GapMathTest.java
+--- gapguard_orig/GapGuardAndroid/logic-test/GapMathTest.java	2026-08-15 14:18:38.000000000 +0000
++++ gapguard_patchtest/GapGuardAndroid/logic-test/GapMathTest.java	2026-08-15 17:17:03.376614747 +0000
+@@ -12,16 +12,19 @@
+     }
+ 
+     public static void main(String[] args) {
+-        eq(GapMath.remainingBytes(900_000_000L, 0L, 100_000_000L),
+-                800_000_000L, "remaining after use");
+-        eq(GapMath.remainingBytes(900_000_000L, GapMath.ONE_GB, 100_000_000L),
+-                1_800_000_000L, "remaining after +1GB");
++        eq(GapMath.remainingBytes(900_000_000L, 0L, 100_000_000L), 800_000_000L, "remaining after use");
++        eq(GapMath.remainingBytes(900_000_000L, GapMath.ONE_GB, 100_000_000L), 1_800_000_000L, "remaining after +1GB");
++        eq(GapMath.remainingBytes(100_000_000L, 0L, 120_000_000L), 0L, "remaining clamps at zero");
++        eq(GapMath.billableDelta(20_000_000L, 50_000_000L), 20_000_000L, "quota accounting freezes at zero");
++        eq(GapMath.billableDelta(0L, 50_000_000L), 0L, "gap traffic is not billed to future quota");
++        eq(GapMath.billableDelta(100_000_000L, 20_000_000L), 20_000_000L, "normal delta billed fully");
+         near(GapMath.bytesToMb(250_000_000L), 250.0, 0.0001, "MB");
+         near(GapMath.bpsToMbit(1_000_000.0), 8.0, 0.0001, "Mbit");
+         near(GapMath.etaMinutes(600_000_000L, 10_000_000.0), 1.0, 0.0001, "ETA");
+         near(GapMath.ema(100.0, 200.0), 118.0, 0.0001, "EMA");
+         System.out.println("PASS: remaining-volume model");
+         System.out.println("PASS: +1 GB accounting");
++        System.out.println("PASS: quota freeze during gap");
+         System.out.println("PASS: unit conversions / ETA / EMA");
+     }
+ }
