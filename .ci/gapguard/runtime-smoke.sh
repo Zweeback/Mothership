@@ -90,6 +90,32 @@ PY
   sleep 1
 }
 
+tap_dialog_positive() {
+  dump_ui
+  cp /tmp/window.xml /tmp/gapguard-booking-dialog.xml
+  local coords
+  coords=$(python3 <<'PY'
+import re, xml.etree.ElementTree as ET
+root=ET.parse('/tmp/window.xml').getroot()
+buttons=[]
+for n in root.iter('node'):
+    if n.attrib.get('class') == 'android.widget.Button' and n.attrib.get('clickable') == 'true':
+        m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', n.attrib.get('bounds',''))
+        if m:
+            x1,y1,x2,y2=map(int,m.groups())
+            if x2>x1 and y2>y1:
+                buttons.append(((x1+x2)//2,(y1+y2)//2,n.attrib.get('text','')))
+if not buttons:
+    raise SystemExit('No clickable dialog buttons found')
+# Android AlertDialog places the positive action at the right edge in LTR layouts.
+x,y,text=max(buttons, key=lambda b:b[0])
+print(x,y)
+PY
+)
+  adb shell input tap $coords
+  sleep 1
+}
+
 # Cold start succeeded above. Find the calibration section inside the scrollable UI.
 scroll_to_top
 ensure_text_visible 'Restwert übernehmen'
@@ -125,7 +151,7 @@ if grep -q 'estimated_depleted' /tmp/gapguard-runtime-events.csv; then
 
   # Exercise complete local depletion -> confirmed +1 GB transition.
   tap_text '+1 GB wurde erfolgreich gebucht'
-  tap_text 'Ja, erfolgreich'
+  tap_dialog_positive
   sleep 2
   adb shell run-as "$PKG" cat files/events.csv | tr -d '\r' | tee /tmp/gapguard-runtime-events.csv
   grep -q 'booked_1gb' /tmp/gapguard-runtime-events.csv
