@@ -1,0 +1,62 @@
+name: Cache Godot Android Local Toolchain
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cache-godot-android-local-toolchain.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required Android SDK components
+        shell: bash
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'build-tools;35.0.1' 'platforms;android-35'
+
+      - name: Extract only Godot 4.7.1 Android debug template
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 4 -o /tmp/templates.tpz \
+            'https://github.com/godotengine/godot/releases/download/4.7.1-stable/Godot_v4.7.1-stable_export_templates.tpz'
+          mkdir -p stage/templates
+          unzip -j /tmp/templates.tpz 'templates/android_debug.apk' -d stage/templates
+          ls -lh stage/templates/android_debug.apk
+
+      - name: Package minimal Android SDK for local Godot export
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          mkdir -p stage/android-sdk/build-tools stage/android-sdk/platforms stage/android-sdk/licenses
+          cp -a "$SDK/build-tools/35.0.1" stage/android-sdk/build-tools/
+          cp -a "$SDK/platform-tools" stage/android-sdk/
+          cp -a "$SDK/platforms/android-35" stage/android-sdk/platforms/
+          if [ -d "$SDK/licenses" ]; then cp -a "$SDK/licenses/." stage/android-sdk/licenses/; fi
+          printf 'java_home=%s\n' "$JAVA_HOME" > stage/TOOLCHAIN.txt
+          du -sh stage/* stage/android-sdk/*
+
+      - name: Upload local toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-4.7.1-android-local-toolchain
+          path: stage/
+          compression-level: 6
+          retention-days: 30
