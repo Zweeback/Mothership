@@ -19,19 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Reconstruct v0.2 source archive
+      - name: Reconstruct and patch source
         run: |
           set -euo pipefail
           cat builds/gapguard/source.b64.part* | base64 -d > /tmp/GapGuardAndroid.zip
           unzip -t /tmp/GapGuardAndroid.zip
-          rm -rf /tmp/gapguard-src
-          mkdir -p /tmp/gapguard-src
+          rm -rf /tmp/gapguard-src && mkdir -p /tmp/gapguard-src
           unzip -q /tmp/GapGuardAndroid.zip -d /tmp/gapguard-src
-
-      - name: Apply v0.3 debug fixes
-        working-directory: /tmp/gapguard-src/GapGuardAndroid
-        run: |
-          set -euo pipefail
+          cd /tmp/gapguard-src/GapGuardAndroid
           patch --batch -p2 < "$GITHUB_WORKSPACE/.ci/gapguard/gapguard-v0.3.patch"
           grep -E 'compileSdk|targetSdk|minSdk|versionCode|versionName' app/build.gradle
 
@@ -55,11 +50,8 @@ jobs:
         working-directory: /tmp/gapguard-src/GapGuardAndroid
         run: |
           set -euo pipefail
-          rm -rf /tmp/gapmath-test
-          mkdir -p /tmp/gapmath-test
-          javac -d /tmp/gapmath-test \
-            app/src/main/java/de/bentropie/gapguard/GapMath.java \
-            logic-test/GapMathTest.java
+          rm -rf /tmp/gapmath-test && mkdir -p /tmp/gapmath-test
+          javac -d /tmp/gapmath-test app/src/main/java/de/bentropie/gapguard/GapMath.java logic-test/GapMathTest.java
           java -cp /tmp/gapmath-test GapMathTest
 
       - name: Android lint
@@ -99,107 +91,7 @@ jobs:
           profile: pixel_7
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
-          script: |
-            set -eu
-            APK=/tmp/gapguard-src/GapGuardAndroid/app/build/outputs/apk/debug/app-debug.apk
-            PKG=de.bentropie.gapguard
-
-            adb install -r "$APK"
-            adb shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS || true
-            adb shell am force-stop "$PKG" || true
-            adb shell am start -W -n "$PKG/.MainActivity" | tee /tmp/gapguard-am-start.txt
-            grep -q 'Status: ok' /tmp/gapguard-am-start.txt
-            sleep 2
-            test -n "$(adb shell pidof "$PKG" | tr -d '\r')"
-
-            dump_ui() {
-              adb shell uiautomator dump /sdcard/window.xml >/dev/null
-              adb pull /sdcard/window.xml /tmp/window.xml >/dev/null
-            }
-
-            tap_text() {
-              local wanted="$1"
-              local tries=0
-              while [ "$tries" -lt 8 ]; do
-                dump_ui
-                coords=$(python3 - "$wanted" <<'PY'
-            import re, sys, xml.etree.ElementTree as ET
-            wanted=sys.argv[1]
-            root=ET.parse('/tmp/window.xml').getroot()
-            for n in root.iter('node'):
-                if n.attrib.get('text') == wanted:
-                    m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', n.attrib.get('bounds',''))
-                    if m:
-                        x1,y1,x2,y2=map(int,m.groups())
-                        if x2>x1 and y2>y1 and y2>0:
-                            print((x1+x2)//2, (y1+y2)//2)
-                            raise SystemExit(0)
-            raise SystemExit(1)
-            PY
-            ) && { adb shell input tap $coords; sleep 1; return 0; }
-                adb shell input swipe 540 1800 540 700 350
-                sleep 1
-                tries=$((tries+1))
-              done
-              echo "Could not find/tap text: $wanted" >&2
-              cat /tmp/window.xml >&2
-              return 1
-            }
-
-            tap_first_edit() {
-              dump_ui
-              coords=$(python3 <<'PY'
-            import re, xml.etree.ElementTree as ET
-            root=ET.parse('/tmp/window.xml').getroot()
-            for n in root.iter('node'):
-                if n.attrib.get('class') == 'android.widget.EditText':
-                    m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', n.attrib.get('bounds',''))
-                    if m:
-                        x1,y1,x2,y2=map(int,m.groups())
-                        if x2>x1 and y2>y1:
-                            print((x1+x2)//2, (y1+y2)//2)
-                            raise SystemExit(0)
-            raise SystemExit(1)
-            PY
-            )
-              adb shell input tap $coords
-              sleep 1
-            }
-
-            dump_ui
-            grep -q 'text="Gap Guard"' /tmp/window.xml
-            grep -q 'text="850"' /tmp/window.xml
-            grep -q 'text="250"' /tmp/window.xml
-
-            # Calibrate at zero so depletion/gap behavior is deterministic without real carrier data.
-            tap_first_edit
-            adb shell input text 0
-            adb shell input keyevent KEYCODE_BACK
-            tap_text 'Restwert übernehmen'
-            tap_text 'Tracking starten'
-            sleep 3
-
-            adb shell dumpsys activity services "$PKG" | grep -q 'TrackerService'
-            adb shell run-as "$PKG" cat files/events.csv | tr -d '\r' | tee /tmp/gapguard-runtime-events.csv
-            grep -q 'estimated_depleted' /tmp/gapguard-runtime-events.csv
-
-            # Confirm +1 GB and prove gap traffic cannot shrink the fresh package.
-            tap_text '+1 GB wurde erfolgreich gebucht'
-            tap_text 'Ja, erfolgreich'
-            sleep 2
-            adb shell run-as "$PKG" cat files/events.csv | tr -d '\r' | tee /tmp/gapguard-runtime-events.csv
-            grep -q 'booked_1gb' /tmp/gapguard-runtime-events.csv
-            grep -q 'gap_seconds=' /tmp/gapguard-runtime-events.csv
-            adb shell run-as "$PKG" cat shared_prefs/gap_guard_state.xml | tr -d '\r' | tee /tmp/gapguard-runtime-prefs.xml
-            grep -q 'name="booked_bytes" value="1000000000"' /tmp/gapguard-runtime-prefs.xml
-            grep -q 'name="used_bytes" value="0"' /tmp/gapguard-runtime-prefs.xml
-            grep -q 'name="tracker_running" value="true"' /tmp/gapguard-runtime-prefs.xml
-
-            # Recalibration while the service runs must no longer falsify tracker state.
-            tap_text 'Restwert übernehmen'
-            sleep 1
-            adb shell run-as "$PKG" cat shared_prefs/gap_guard_state.xml | tr -d '\r' | tee /tmp/gapguard-runtime-prefs-after-recal.xml
-            grep -q 'name="tracker_running" value="true"' /tmp/gapguard-runtime-prefs-after-recal.xml
+          script: bash "$GITHUB_WORKSPACE/.ci/gapguard/runtime-smoke.sh"
 
       - name: Package patched source and evidence
         if: always()
@@ -229,4 +121,7 @@ jobs:
             /tmp/gapguard-runtime-events.csv
             /tmp/gapguard-runtime-prefs.xml
             /tmp/gapguard-runtime-prefs-after-recal.xml
+            /tmp/gapguard-runtime-capability.txt
+            /tmp/gapguard-services.txt
+            /tmp/gapguard-am-start.txt
           if-no-files-found: warn
