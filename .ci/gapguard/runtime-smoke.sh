@@ -18,8 +18,8 @@ dump_ui() {
 }
 
 scroll_to_top() {
-  for _ in $(seq 1 8); do
-    adb shell input swipe 540 700 540 1900 220 >/dev/null
+  for _ in $(seq 1 10); do
+    adb shell input swipe 540 700 540 1900 180 >/dev/null
   done
   sleep 1
 }
@@ -42,24 +42,31 @@ raise SystemExit(1)
 PY
 }
 
-tap_text() {
+ensure_text_visible() {
   local wanted="$1"
   local tries=0
-  while [ "$tries" -lt 12 ]; do
+  while [ "$tries" -lt 14 ]; do
     dump_ui
-    local coords
-    if coords=$(find_text_coords "$wanted"); then
-      adb shell input tap $coords
-      sleep 1
+    if find_text_coords "$wanted" >/dev/null 2>&1; then
       return 0
     fi
-    adb shell input swipe 540 1800 540 700 300 >/dev/null
+    adb shell input swipe 540 1800 540 700 260 >/dev/null
     sleep 1
     tries=$((tries+1))
   done
-  echo "Could not find/tap text: $wanted" >&2
-  cp /tmp/window.xml "/tmp/gapguard-window-failure.xml" || true
+  echo "Could not find visible text: $wanted" >&2
+  cp /tmp/window.xml /tmp/gapguard-window-failure.xml || true
   return 1
+}
+
+tap_text() {
+  local wanted="$1"
+  ensure_text_visible "$wanted"
+  dump_ui
+  local coords
+  coords=$(find_text_coords "$wanted")
+  adb shell input tap $coords
+  sleep 1
 }
 
 tap_first_edit() {
@@ -83,32 +90,15 @@ PY
   sleep 1
 }
 
-# Verify the first actionable control rather than relying on a decorative title in the accessibility tree.
+# Cold start succeeded above. Find the calibration section inside the scrollable UI.
 scroll_to_top
+ensure_text_visible 'Restwert übernehmen'
 dump_ui
-cp /tmp/window.xml /tmp/gapguard-window-initial.xml
-grep -q 'text="Restwert übernehmen"' /tmp/window.xml
-
-# Ensure default threshold values are actual EditText values, not merely hints.
-for wanted in 850 250; do
-  found=0
-  for _ in $(seq 1 12); do
-    dump_ui
-    if grep -q "text=\"$wanted\"" /tmp/window.xml; then
-      found=1
-      break
-    fi
-    adb shell input swipe 540 1800 540 700 300 >/dev/null
-    sleep 1
-  done
-  test "$found" -eq 1
-done
-
-echo 'PASS: default warning thresholds rendered as real values'
+cp /tmp/window.xml /tmp/gapguard-window-calibration.xml
 
 # Calibrate at zero and start the user-controlled foreground service.
-scroll_to_top
 tap_first_edit
+adb shell input keyevent KEYCODE_MOVE_END >/dev/null || true
 adb shell input text 0
 adb shell input keyevent KEYCODE_BACK
 sleep 1
@@ -119,13 +109,21 @@ sleep 3
 adb shell dumpsys activity services "$PKG" | tee /tmp/gapguard-services.txt
 grep -q 'TrackerService' /tmp/gapguard-services.txt
 
-# Capture state. Android emulators may not expose a mobile radio counter; that branch is recorded, not faked.
-adb shell run-as "$PKG" cat files/events.csv 2>/dev/null | tr -d '\r' | tee /tmp/gapguard-runtime-events.csv || true
 adb shell run-as "$PKG" cat shared_prefs/gap_guard_state.xml | tr -d '\r' | tee /tmp/gapguard-runtime-prefs.xml
+grep -q 'name="calibrated" value="true"' /tmp/gapguard-runtime-prefs.xml
 grep -q 'name="tracker_running" value="true"' /tmp/gapguard-runtime-prefs.xml
 
+# Ensure default warning thresholds are actual EditText values, not mere hints.
+ensure_text_visible '850'
+ensure_text_visible '250'
+echo 'PASS: default warning thresholds rendered as real values'
+
+# Capture runtime events. Emulators may not expose a mobile-radio counter; record that honestly.
+adb shell run-as "$PKG" cat files/events.csv 2>/dev/null | tr -d '\r' | tee /tmp/gapguard-runtime-events.csv || true
 if grep -q 'estimated_depleted' /tmp/gapguard-runtime-events.csv; then
   echo 'RUNTIME_MOBILE_COUNTER=available' | tee /tmp/gapguard-runtime-capability.txt
+
+  # Exercise complete local depletion -> confirmed +1 GB transition.
   tap_text '+1 GB wurde erfolgreich gebucht'
   tap_text 'Ja, erfolgreich'
   sleep 2
@@ -139,11 +137,18 @@ else
   echo 'RUNTIME_MOBILE_COUNTER=unavailable_on_emulator' | tee /tmp/gapguard-runtime-capability.txt
 fi
 
-# Recalibration while tracking must preserve the running-state flag.
+# Recalibration while tracking must preserve the service-running state.
 scroll_to_top
 tap_text 'Restwert übernehmen'
 sleep 1
 adb shell run-as "$PKG" cat shared_prefs/gap_guard_state.xml | tr -d '\r' | tee /tmp/gapguard-runtime-prefs-after-recal.xml
 grep -q 'name="tracker_running" value="true"' /tmp/gapguard-runtime-prefs-after-recal.xml
+
+# No fatal app process crash should have occurred during the smoke path.
+test -n "$(adb shell pidof "$PKG" | tr -d '\r')"
+adb logcat -d -t 500 | grep -E 'FATAL EXCEPTION|AndroidRuntime' | grep "$PKG" > /tmp/gapguard-fatal-log.txt && {
+  cat /tmp/gapguard-fatal-log.txt >&2
+  exit 1
+} || true
 
 echo 'PASS: Android emulator install/start/UI/service/state smoke test'
