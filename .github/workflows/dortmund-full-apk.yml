@@ -1,0 +1,139 @@
+name: Dortmund Full-Model APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - godot/dortmund-master
+    paths:
+      - 'godot/dortmund/**'
+      - '.github/workflows/dortmund-full-apk.yml'
+      - '.github/copilot-instructions.md'
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: '4.7.1'
+  PROJECT_DIR: godot/dortmund
+  CITY_SHA256: 2dc4b395603448feb2a27eca2046f2aa5c20d217b2df75fa8512a64b7b3f8327
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout project + Git LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Resolve canonical dortmund.glb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROJECT_DIR/assets"
+          ASSET="$PROJECT_DIR/assets/dortmund.glb"
+
+          # Git LFS is preferred. If the object is not in the checkout, use the
+          # persistent GitHub Release asset instead.
+          if [ ! -f "$ASSET" ] || [ "$(stat -c%s "$ASSET" 2>/dev/null || echo 0)" -lt 100000000 ]; then
+            rm -f "$ASSET"
+            if gh release view dortmund-assets-v1 >/dev/null 2>&1; then
+              gh release download dortmund-assets-v1 --pattern 'dortmund.glb' --dir "$PROJECT_DIR/assets" --clobber
+            fi
+          fi
+
+          if [ ! -f "$ASSET" ]; then
+            echo '::error::Canonical dortmund.glb is missing.'
+            echo 'One-time setup: attach dortmund.glb to GitHub Release tag dortmund-assets-v1, or push it through Git LFS.'
+            exit 21
+          fi
+
+          echo "$CITY_SHA256  $ASSET" | sha256sum -c -
+          test "$(stat -c%s "$ASSET")" -eq 143229592
+          echo "Full Dortmund asset verified: $(du -h "$ASSET" | cut -f1)"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'build-tools;35.0.1' 'platforms;android-35'
+
+      - name: Download Godot 4.7.1 editor + Android debug template
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 4 -o /tmp/godot.zip \
+            'https://github.com/godotengine/godot/releases/download/4.7.1-stable/Godot_v4.7.1-stable_linux.x86_64.zip'
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.1-stable_linux.x86_64
+          sudo mv /tmp/godot/Godot_v4.7.1-stable_linux.x86_64 /usr/local/bin/godot
+          godot --version
+
+          curl -L --fail --retry 4 -o /tmp/godot-android-debug.apk \
+            'https://github.com/godotengine/godot/releases/download/4.7.1-stable/Godot_v4.7.1-stable_android_debug.apk'
+
+      - name: Configure Godot Android paths + debug signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/godot" "$HOME/.android" "$PROJECT_DIR/build"
+          JAVA_HOME_REAL="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+          ANDROID_SDK_REAL="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          keytool -genkeypair -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname 'CN=Android Debug,O=Android,C=US' >/dev/null 2>&1 || true
+
+          cat > "$HOME/.config/godot/editor_settings-4.7.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_REAL"
+          export/android/java_sdk_path = "$JAVA_HOME_REAL"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          EOF
+
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('godot/dortmund/export_presets.cfg')
+          s = p.read_text()
+          s = s.replace('custom_template/debug=""', 'custom_template/debug="/tmp/godot-android-debug.apk"')
+          p.write_text(s)
+          PY
+
+      - name: Import all Godot resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --path "$PROJECT_DIR" --import
+
+      - name: Export ARM64 debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --path "$PROJECT_DIR" --export-debug Android "$PROJECT_DIR/build/DortmundGameMap-FullModel.apk"
+          test -s "$PROJECT_DIR/build/DortmundGameMap-FullModel.apk"
+          ls -lh "$PROJECT_DIR/build/DortmundGameMap-FullModel.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DortmundGameMap-FullModel-APK
+          path: godot/dortmund/build/DortmundGameMap-FullModel.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
