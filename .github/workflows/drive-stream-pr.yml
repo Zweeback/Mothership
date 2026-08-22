@@ -1,4 +1,4 @@
-name: Drive ZIP stream worker
+name: Drive OBB stream probe
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ env:
   ZIP_NAME: takeout-20250614T081435Z-1-008.zip
 
 jobs:
-  inventory:
+  probe:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -22,9 +22,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install streaming tools
-        run: python -m pip install --disable-pip-version-check -q gdown ijson tqdm
-      - name: Download Drive blob sequentially
+      - name: Install downloader
+        run: python -m pip install --disable-pip-version-check -q gdown
+      - name: Download outer ZIP sequentially
         shell: bash
         run: |
           set -euo pipefail
@@ -35,37 +35,78 @@ jobs:
           if not gdown.download(id=os.environ['FILE_ID'], output=str(p), quiet=False, resume=True):
               raise SystemExit('gdown failed')
           got=p.stat().st_size; exp=int(os.environ['EXPECTED_SIZE'])
-          print(f'downloaded_bytes={got}')
+          print('downloaded_bytes=',got)
           if got != exp: raise SystemExit(f'size mismatch {got} != {exp}')
           PY
-      - name: Parse ZIP directory
+      - name: Stream-decompress OBB and inspect nested container
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os,json,zipfile,pathlib,csv,collections
-          zpath=pathlib.Path('work')/os.environ['ZIP_NAME']; out=pathlib.Path('out'); out.mkdir(exist_ok=True)
-          text_ext={'.json','.jsonl','.ndjson','.txt','.csv','.tsv','.md','.html','.htm','.xml','.yaml','.yml','.log'}
-          rows=[]
-          with zipfile.ZipFile(zpath) as zf:
-            for i,info in enumerate(zf.infolist()):
-              ext=pathlib.PurePosixPath(info.filename).suffix.lower(); lname=info.filename.lower(); score=0
-              for term,w in [('conversation',100),('messages',80),('message',60),('chat',60),('history',50),('export',20),('json',10)]:
-                if term in lname: score+=w
-              if ext in text_ext: score+=5
-              rows.append({'index':i,'name':info.filename,'compressed_bytes':info.compress_size,'uncompressed_bytes':info.file_size,'crc':info.CRC,'compression':info.compress_type,'is_dir':info.is_dir(),'suffix':ext,'text_candidate':ext in text_ext,'priority_score':score})
-          priority=sorted(rows,key=lambda r:(-r['priority_score'],-r['uncompressed_bytes'],r['name']))
-          (out/'manifest.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf-8')
-          (out/'priority_manifest.json').write_text(json.dumps(priority,ensure_ascii=False,indent=2),encoding='utf-8')
-          summary={'zip_bytes':zpath.stat().st_size,'members':len(rows),'files':sum(not r['is_dir'] for r in rows),'dirs':sum(r['is_dir'] for r in rows),'uncompressed_total':sum(r['uncompressed_bytes'] for r in rows),'text_candidates':sum(r['text_candidate'] for r in rows),'extensions':collections.Counter(r['suffix'] or '<none>' for r in rows if not r['is_dir']).most_common(100),'top_priority':priority[:250]}
-          (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
-          print(json.dumps({k:v for k,v in summary.items() if k not in ('extensions','top_priority')},indent=2))
-          for r in priority[:100]: print(r['priority_score'],r['uncompressed_bytes'],r['name'])
+          import os, pathlib, zipfile, shutil, json, hashlib, struct, collections
+          outer=pathlib.Path('work')/os.environ['ZIP_NAME']; out=pathlib.Path('out'); out.mkdir(exist_ok=True)
+          obb=pathlib.Path('work')/'main.1.com.AntiZeroGames.CH.obb'
+          with zipfile.ZipFile(outer) as zf:
+              infos=[i for i in zf.infolist() if not i.is_dir()]
+              if len(infos)!=1: raise SystemExit(f'expected one member, got {len(infos)}')
+              info=infos[0]
+              print('outer_member=',info.filename,'uncompressed=',info.file_size)
+              with zf.open(info,'r') as src, open(obb,'wb') as dst:
+                  shutil.copyfileobj(src,dst,length=8*1024*1024)
+          size=obb.stat().st_size
+          if size != 4261412864: print('WARNING unexpected OBB size',size)
+          head=obb.open('rb').read(1024*1024)
+          with obb.open('rb') as f:
+              f.seek(max(0,size-1024*1024)); tail=f.read()
+          sigs={
+            'zip_local': b'PK\x03\x04', 'zip_eocd': b'PK\x05\x06', 'zip64_eocd': b'PK\x06\x06',
+            '7z': b'7z\xbc\xaf\x27\x1c', 'rar4': b'Rar!\x1a\x07\x00', 'rar5': b'Rar!\x1a\x07\x01\x00',
+            'unityfs': b'UnityFS', 'unityweb': b'UnityWeb', 'unityraw': b'UnityRaw', 'sqlite': b'SQLite format 3\x00',
+            'unreal_pak_magic_le': b'\xe1\x12\x6f\x5a'
+          }
+          probe={'obb_bytes':size,'head_hex':head[:256].hex(),'tail_hex':tail[-256:].hex(),'head_ascii':''.join(chr(b) if 32<=b<127 else '.' for b in head[:512]),'signatures':{},'is_zipfile':zipfile.is_zipfile(obb)}
+          for name,sig in sigs.items():
+              probe['signatures'][name]={'head_offset':head.find(sig),'tail_offset_relative':tail.find(sig)}
+          # sparse signature scan: first and last 64 MiB
+          def scan_region(start,length):
+              found={k:[] for k in sigs}
+              with obb.open('rb') as f:
+                  f.seek(start); data=f.read(length)
+              for k,s in sigs.items():
+                  pos=0
+                  while True:
+                      j=data.find(s,pos)
+                      if j<0: break
+                      found[k].append(start+j)
+                      if len(found[k])>=20: break
+                      pos=j+1
+              return {k:v for k,v in found.items() if v}
+          region=64*1024*1024
+          probe['first64m_signatures']=scan_region(0,min(region,size))
+          if size>region: probe['last64m_signatures']=scan_region(max(0,size-region),min(region,size))
+          (out/'obb_probe.json').write_text(json.dumps(probe,indent=2),encoding='utf-8')
+          print(json.dumps(probe,indent=2)[:12000])
+          if probe['is_zipfile']:
+              rows=[]
+              with zipfile.ZipFile(obb) as inz:
+                  for idx,i in enumerate(inz.infolist()):
+                      rows.append({'index':idx,'name':i.filename,'compressed_bytes':i.compress_size,'uncompressed_bytes':i.file_size,'crc':i.CRC,'compression':i.compress_type,'is_dir':i.is_dir(),'suffix':pathlib.PurePosixPath(i.filename).suffix.lower()})
+              (out/'inner_manifest.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf-8')
+              counts=collections.Counter(r['suffix'] or '<none>' for r in rows if not r['is_dir'])
+              summary={'members':len(rows),'files':sum(not r['is_dir'] for r in rows),'dirs':sum(r['is_dir'] for r in rows),'compressed_total':sum(r['compressed_bytes'] for r in rows),'uncompressed_total':sum(r['uncompressed_bytes'] for r in rows),'extensions':counts.most_common(200),'largest':sorted(rows,key=lambda r:r['uncompressed_bytes'],reverse=True)[:300]}
+              (out/'inner_summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+              print('INNER ZIP SUMMARY')
+              print(json.dumps({k:v for k,v in summary.items() if k!='largest'},indent=2))
+              for r in summary['largest'][:100]: print(r['uncompressed_bytes'],r['name'])
           PY
-      - name: Upload inventory
+      - name: Identify with file utility
+        shell: bash
+        run: |
+          file work/main.1.com.AntiZeroGames.CH.obb | tee out/file_identification.txt || true
+      - name: Upload probe
         uses: actions/upload-artifact@v4
         with:
-          name: drive-zip-inventory
+          name: drive-obb-probe
           path: out/
           retention-days: 7
           if-no-files-found: error
