@@ -1,4 +1,4 @@
-name: Drive OBB stream probe
+name: Drive PAK sequential salvage
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ env:
   ZIP_NAME: takeout-20250614T081435Z-1-008.zip
 
 jobs:
-  probe:
+  salvage:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -24,7 +24,7 @@ jobs:
           python-version: '3.12'
       - name: Install downloader
         run: python -m pip install --disable-pip-version-check -q gdown
-      - name: Download outer ZIP sequentially
+      - name: Download outer ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -38,75 +38,128 @@ jobs:
           print('downloaded_bytes=',got)
           if got != exp: raise SystemExit(f'size mismatch {got} != {exp}')
           PY
-      - name: Stream-decompress OBB and inspect nested container
+      - name: Sequentially scan decompressed OBB and embedded PAK
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os, pathlib, zipfile, shutil, json, hashlib, struct, collections
-          outer=pathlib.Path('work')/os.environ['ZIP_NAME']; out=pathlib.Path('out'); out.mkdir(exist_ok=True)
-          obb=pathlib.Path('work')/'main.1.com.AntiZeroGames.CH.obb'
+          import os, pathlib, zipfile, struct, hashlib, json, re, collections
+
+          outer=pathlib.Path('work')/os.environ['ZIP_NAME']
+          out=pathlib.Path('out'); out.mkdir(exist_ok=True)
+          CHUNK=8*1024*1024
+          PAK_OFFSET=115
+          DECLARED_PAK=4277331834
+          EXPECTED_AVAILABLE=4261412749
+
+          sigs={
+            'unreal_package_tag': b'\xc1\x83\x2a\x9e',
+            'png': b'\x89PNG\r\n\x1a\n',
+            'jpeg': b'\xff\xd8\xff',
+            'ogg': b'OggS',
+            'riff': b'RIFF',
+            'dds': b'DDS ',
+            'sqlite': b'SQLite format 3\x00',
+            'zip_local': b'PK\x03\x04',
+            'gzip': b'\x1f\x8b\x08',
+          }
+          counts={k:0 for k in sigs}
+          offsets={k:[] for k in sigs}
+          MAX_OFFSETS=50000
+          interesting=set()
+          all_pathish=set()
+          sha=hashlib.sha256()
+          pak_bytes=0
+          stream_pos=0
+          carry=b''
+          text_carry=b''
+
+          def keep_string(raw):
+              try: s=raw.decode('ascii')
+              except: return
+              if len(s)<8: return
+              low=s.lower()
+              if ('fluidgame' in low or '/game/' in low or 'engine/' in low or
+                  any(x in low for x in ['.uasset','.uexp','.ubulk','.umap','.locres','.ini','.json','.wav','.ogg','.png','.jpg','.jpeg','.mp4','.webm','blueprint','material','skeletal','animation','widget'])):
+                  if len(s)<=500: interesting.add(s)
+              if ('/' in s or '\\' in s) and len(s)<=500:
+                  if any(c.isalpha() for c in s): all_pathish.add(s)
+
+          def feed_strings(data, final=False):
+              global text_carry
+              buf=text_carry+data
+              start=0
+              i=0
+              while i<len(buf):
+                  b=buf[i]
+                  if 32<=b<=126:
+                      i+=1; continue
+                  if i-start>=8: keep_string(buf[start:i])
+                  i+=1; start=i
+              if final:
+                  if len(buf)-start>=8: keep_string(buf[start:])
+                  text_carry=b''
+              else:
+                  text_carry=buf[start:] if len(buf)-start<4096 else buf[-4096:]
+
           with zipfile.ZipFile(outer) as zf:
               infos=[i for i in zf.infolist() if not i.is_dir()]
-              if len(infos)!=1: raise SystemExit(f'expected one member, got {len(infos)}')
-              info=infos[0]
-              print('outer_member=',info.filename,'uncompressed=',info.file_size)
-              with zf.open(info,'r') as src, open(obb,'wb') as dst:
-                  shutil.copyfileobj(src,dst,length=8*1024*1024)
-          size=obb.stat().st_size
-          if size != 4261412864: print('WARNING unexpected OBB size',size)
-          head=obb.open('rb').read(1024*1024)
-          with obb.open('rb') as f:
-              f.seek(max(0,size-1024*1024)); tail=f.read()
-          sigs={
-            'zip_local': b'PK\x03\x04', 'zip_eocd': b'PK\x05\x06', 'zip64_eocd': b'PK\x06\x06',
-            '7z': b'7z\xbc\xaf\x27\x1c', 'rar4': b'Rar!\x1a\x07\x00', 'rar5': b'Rar!\x1a\x07\x01\x00',
-            'unityfs': b'UnityFS', 'unityweb': b'UnityWeb', 'unityraw': b'UnityRaw', 'sqlite': b'SQLite format 3\x00',
-            'unreal_pak_magic_le': b'\xe1\x12\x6f\x5a'
-          }
-          probe={'obb_bytes':size,'head_hex':head[:256].hex(),'tail_hex':tail[-256:].hex(),'head_ascii':''.join(chr(b) if 32<=b<127 else '.' for b in head[:512]),'signatures':{},'is_zipfile':zipfile.is_zipfile(obb)}
-          for name,sig in sigs.items():
-              probe['signatures'][name]={'head_offset':head.find(sig),'tail_offset_relative':tail.find(sig)}
-          # sparse signature scan: first and last 64 MiB
-          def scan_region(start,length):
-              found={k:[] for k in sigs}
-              with obb.open('rb') as f:
-                  f.seek(start); data=f.read(length)
-              for k,s in sigs.items():
-                  pos=0
+              if len(infos)!=1: raise SystemExit(f'expected one OBB, got {len(infos)}')
+              with zf.open(infos[0],'r') as src:
+                  # discard exactly the OBB local ZIP header + filename + extra field
+                  remaining=PAK_OFFSET
+                  while remaining:
+                      part=src.read(min(CHUNK,remaining))
+                      if not part: raise SystemExit('OBB ended before PAK offset')
+                      remaining-=len(part)
                   while True:
-                      j=data.find(s,pos)
-                      if j<0: break
-                      found[k].append(start+j)
-                      if len(found[k])>=20: break
-                      pos=j+1
-              return {k:v for k,v in found.items() if v}
-          region=64*1024*1024
-          probe['first64m_signatures']=scan_region(0,min(region,size))
-          if size>region: probe['last64m_signatures']=scan_region(max(0,size-region),min(region,size))
-          (out/'obb_probe.json').write_text(json.dumps(probe,indent=2),encoding='utf-8')
-          print(json.dumps(probe,indent=2)[:12000])
-          if probe['is_zipfile']:
-              rows=[]
-              with zipfile.ZipFile(obb) as inz:
-                  for idx,i in enumerate(inz.infolist()):
-                      rows.append({'index':idx,'name':i.filename,'compressed_bytes':i.compress_size,'uncompressed_bytes':i.file_size,'crc':i.CRC,'compression':i.compress_type,'is_dir':i.is_dir(),'suffix':pathlib.PurePosixPath(i.filename).suffix.lower()})
-              (out/'inner_manifest.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf-8')
-              counts=collections.Counter(r['suffix'] or '<none>' for r in rows if not r['is_dir'])
-              summary={'members':len(rows),'files':sum(not r['is_dir'] for r in rows),'dirs':sum(r['is_dir'] for r in rows),'compressed_total':sum(r['compressed_bytes'] for r in rows),'uncompressed_total':sum(r['uncompressed_bytes'] for r in rows),'extensions':counts.most_common(200),'largest':sorted(rows,key=lambda r:r['uncompressed_bytes'],reverse=True)[:300]}
-              (out/'inner_summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
-              print('INNER ZIP SUMMARY')
-              print(json.dumps({k:v for k,v in summary.items() if k!='largest'},indent=2))
-              for r in summary['largest'][:100]: print(r['uncompressed_bytes'],r['name'])
+                      data=src.read(CHUNK)
+                      if not data: break
+                      sha.update(data)
+                      pak_bytes+=len(data)
+                      buf=carry+data
+                      base=pak_bytes-len(data)-len(carry)
+                      for name,sig in sigs.items():
+                          pos=0
+                          while True:
+                              j=buf.find(sig,pos)
+                              if j<0: break
+                              abspos=base+j
+                              # avoid duplicates found inside overlap
+                              if abspos >= pak_bytes-len(data):
+                                  counts[name]+=1
+                                  if len(offsets[name])<MAX_OFFSETS: offsets[name].append(abspos)
+                              pos=j+1
+                      feed_strings(data)
+                      carry=buf[-64:]
+                      if pak_bytes%(512*1024*1024)<CHUNK:
+                          print('scanned_pak_bytes=',pak_bytes)
+                  feed_strings(b'',final=True)
+
+          summary={
+            'pak_offset_in_obb':PAK_OFFSET,
+            'declared_pak_bytes':DECLARED_PAK,
+            'available_pak_bytes':pak_bytes,
+            'expected_available_bytes':EXPECTED_AVAILABLE,
+            'missing_tail_bytes':DECLARED_PAK-pak_bytes,
+            'available_fraction':pak_bytes/DECLARED_PAK,
+            'sha256_available_pak':sha.hexdigest(),
+            'signature_counts':counts,
+            'signature_offsets':offsets,
+            'interesting_string_count':len(interesting),
+            'pathish_string_count':len(all_pathish),
+          }
+          (out/'salvage_summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          (out/'interesting_strings.txt').write_text('\n'.join(sorted(interesting)),encoding='utf-8',errors='ignore')
+          (out/'pathish_strings.txt').write_text('\n'.join(sorted(all_pathish)[:200000]),encoding='utf-8',errors='ignore')
+          print(json.dumps({k:v for k,v in summary.items() if k!='signature_offsets'},indent=2))
+          print('FIRST INTERESTING STRINGS')
+          for s in sorted(interesting)[:500]: print(s)
           PY
-      - name: Identify with file utility
-        shell: bash
-        run: |
-          file work/main.1.com.AntiZeroGames.CH.obb | tee out/file_identification.txt || true
-      - name: Upload probe
+      - name: Upload salvage map
         uses: actions/upload-artifact@v4
         with:
-          name: drive-obb-probe
+          name: drive-pak-salvage-map
           path: out/
           retention-days: 7
           if-no-files-found: error
