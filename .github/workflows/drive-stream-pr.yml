@@ -1,4 +1,4 @@
-name: Drive PAK sequential salvage
+name: Drive PAK sequential salvage optimized
 
 on:
   pull_request:
@@ -38,128 +38,87 @@ jobs:
           print('downloaded_bytes=',got)
           if got != exp: raise SystemExit(f'size mismatch {got} != {exp}')
           PY
-      - name: Sequentially scan decompressed OBB and embedded PAK
+      - name: Optimized sequential salvage scan
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os, pathlib, zipfile, struct, hashlib, json, re, collections
+          import os, pathlib, zipfile, hashlib, json, re
 
           outer=pathlib.Path('work')/os.environ['ZIP_NAME']
           out=pathlib.Path('out'); out.mkdir(exist_ok=True)
-          CHUNK=8*1024*1024
+          CHUNK=16*1024*1024
           PAK_OFFSET=115
           DECLARED_PAK=4277331834
-          EXPECTED_AVAILABLE=4261412749
-
           sigs={
             'unreal_package_tag': b'\xc1\x83\x2a\x9e',
-            'png': b'\x89PNG\r\n\x1a\n',
-            'jpeg': b'\xff\xd8\xff',
-            'ogg': b'OggS',
-            'riff': b'RIFF',
-            'dds': b'DDS ',
-            'sqlite': b'SQLite format 3\x00',
-            'zip_local': b'PK\x03\x04',
-            'gzip': b'\x1f\x8b\x08',
+            'png': b'\x89PNG\r\n\x1a\n', 'jpeg': b'\xff\xd8\xff', 'ogg': b'OggS',
+            'riff': b'RIFF', 'dds': b'DDS ', 'sqlite': b'SQLite format 3\x00',
+            'zip_local': b'PK\x03\x04', 'gzip': b'\x1f\x8b\x08'
           }
-          counts={k:0 for k in sigs}
-          offsets={k:[] for k in sigs}
-          MAX_OFFSETS=50000
-          interesting=set()
-          all_pathish=set()
-          sha=hashlib.sha256()
-          pak_bytes=0
-          stream_pos=0
-          carry=b''
-          text_carry=b''
+          counts={k:0 for k in sigs}; offsets={k:[] for k in sigs}; MAX_OFFSETS=50000
+          interesting=set(); pathish=set(); sha=hashlib.sha256(); pak_bytes=0; carry=b''
+          printable=re.compile(rb'[\x20-\x7e]{8,500}')
+          wanted=(b'fluidgame',b'/game/',b'engine/',b'.uasset',b'.uexp',b'.ubulk',b'.umap',b'.locres',b'.ini',b'.json',b'.wav',b'.ogg',b'.png',b'.jpg',b'.jpeg',b'.mp4',b'.webm',b'blueprint',b'material',b'skeletal',b'animation',b'widget')
 
-          def keep_string(raw):
-              try: s=raw.decode('ascii')
-              except: return
-              if len(s)<8: return
-              low=s.lower()
-              if ('fluidgame' in low or '/game/' in low or 'engine/' in low or
-                  any(x in low for x in ['.uasset','.uexp','.ubulk','.umap','.locres','.ini','.json','.wav','.ogg','.png','.jpg','.jpeg','.mp4','.webm','blueprint','material','skeletal','animation','widget'])):
-                  if len(s)<=500: interesting.add(s)
-              if ('/' in s or '\\' in s) and len(s)<=500:
-                  if any(c.isalpha() for c in s): all_pathish.add(s)
-
-          def feed_strings(data, final=False):
-              global text_carry
-              buf=text_carry+data
-              start=0
-              i=0
-              while i<len(buf):
-                  b=buf[i]
-                  if 32<=b<=126:
-                      i+=1; continue
-                  if i-start>=8: keep_string(buf[start:i])
-                  i+=1; start=i
-              if final:
-                  if len(buf)-start>=8: keep_string(buf[start:])
-                  text_carry=b''
-              else:
-                  text_carry=buf[start:] if len(buf)-start<4096 else buf[-4096:]
+          def scan_strings(buf):
+              for m in printable.finditer(buf):
+                  raw=m.group(0); low=raw.lower()
+                  try: s=raw.decode('ascii')
+                  except: continue
+                  if any(w in low for w in wanted): interesting.add(s)
+                  if (b'/' in raw or b'\\' in raw) and any((65<=c<=90 or 97<=c<=122) for c in raw):
+                      pathish.add(s)
 
           with zipfile.ZipFile(outer) as zf:
               infos=[i for i in zf.infolist() if not i.is_dir()]
               if len(infos)!=1: raise SystemExit(f'expected one OBB, got {len(infos)}')
-              with zf.open(infos[0],'r') as src:
-                  # discard exactly the OBB local ZIP header + filename + extra field
+              with zf.open(infos[0]) as src:
                   remaining=PAK_OFFSET
                   while remaining:
-                      part=src.read(min(CHUNK,remaining))
-                      if not part: raise SystemExit('OBB ended before PAK offset')
-                      remaining-=len(part)
+                      p=src.read(min(CHUNK,remaining))
+                      if not p: raise SystemExit('OBB ended before PAK')
+                      remaining-=len(p)
                   while True:
                       data=src.read(CHUNK)
                       if not data: break
-                      sha.update(data)
-                      pak_bytes+=len(data)
-                      buf=carry+data
-                      base=pak_bytes-len(data)-len(carry)
+                      old=pak_bytes; pak_bytes+=len(data); sha.update(data)
+                      buf=carry+data; base=old-len(carry)
                       for name,sig in sigs.items():
                           pos=0
                           while True:
                               j=buf.find(sig,pos)
                               if j<0: break
                               abspos=base+j
-                              # avoid duplicates found inside overlap
-                              if abspos >= pak_bytes-len(data):
+                              if abspos>=old:
                                   counts[name]+=1
                                   if len(offsets[name])<MAX_OFFSETS: offsets[name].append(abspos)
                               pos=j+1
-                      feed_strings(data)
-                      carry=buf[-64:]
-                      if pak_bytes%(512*1024*1024)<CHUNK:
-                          print('scanned_pak_bytes=',pak_bytes)
-                  feed_strings(b'',final=True)
+                      scan_strings(buf)
+                      carry=buf[-512:]
+                      if pak_bytes%(512*1024*1024)<CHUNK: print('scanned_pak_bytes=',pak_bytes)
 
           summary={
             'pak_offset_in_obb':PAK_OFFSET,
             'declared_pak_bytes':DECLARED_PAK,
             'available_pak_bytes':pak_bytes,
-            'expected_available_bytes':EXPECTED_AVAILABLE,
             'missing_tail_bytes':DECLARED_PAK-pak_bytes,
             'available_fraction':pak_bytes/DECLARED_PAK,
             'sha256_available_pak':sha.hexdigest(),
             'signature_counts':counts,
             'signature_offsets':offsets,
             'interesting_string_count':len(interesting),
-            'pathish_string_count':len(all_pathish),
+            'pathish_string_count':len(pathish)
           }
           (out/'salvage_summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
-          (out/'interesting_strings.txt').write_text('\n'.join(sorted(interesting)),encoding='utf-8',errors='ignore')
-          (out/'pathish_strings.txt').write_text('\n'.join(sorted(all_pathish)[:200000]),encoding='utf-8',errors='ignore')
+          (out/'interesting_strings.txt').write_text('\n'.join(sorted(interesting)[:200000]),encoding='utf-8',errors='ignore')
+          (out/'pathish_strings.txt').write_text('\n'.join(sorted(pathish)[:200000]),encoding='utf-8',errors='ignore')
           print(json.dumps({k:v for k,v in summary.items() if k!='signature_offsets'},indent=2))
-          print('FIRST INTERESTING STRINGS')
-          for s in sorted(interesting)[:500]: print(s)
           PY
       - name: Upload salvage map
         uses: actions/upload-artifact@v4
         with:
-          name: drive-pak-salvage-map
+          name: drive-pak-salvage-map-optimized
           path: out/
           retention-days: 7
           if-no-files-found: error
