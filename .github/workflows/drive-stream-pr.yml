@@ -1,0 +1,71 @@
+name: Drive ZIP stream worker
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FILE_ID: 1rONvxcNPn1r41h_ELj5IJ5d7keEmd6Uj
+  EXPECTED_SIZE: '1366761469'
+  ZIP_NAME: takeout-20250614T081435Z-1-008.zip
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install streaming tools
+        run: python -m pip install --disable-pip-version-check -q gdown ijson tqdm
+      - name: Download Drive blob sequentially
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work out
+          python - <<'PY'
+          import os, pathlib, gdown
+          p=pathlib.Path('work')/os.environ['ZIP_NAME']
+          if not gdown.download(id=os.environ['FILE_ID'], output=str(p), quiet=False, resume=True):
+              raise SystemExit('gdown failed')
+          got=p.stat().st_size; exp=int(os.environ['EXPECTED_SIZE'])
+          print(f'downloaded_bytes={got}')
+          if got != exp: raise SystemExit(f'size mismatch {got} != {exp}')
+          PY
+      - name: Parse ZIP directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os,json,zipfile,pathlib,csv,collections
+          zpath=pathlib.Path('work')/os.environ['ZIP_NAME']; out=pathlib.Path('out'); out.mkdir(exist_ok=True)
+          text_ext={'.json','.jsonl','.ndjson','.txt','.csv','.tsv','.md','.html','.htm','.xml','.yaml','.yml','.log'}
+          rows=[]
+          with zipfile.ZipFile(zpath) as zf:
+            for i,info in enumerate(zf.infolist()):
+              ext=pathlib.PurePosixPath(info.filename).suffix.lower(); lname=info.filename.lower(); score=0
+              for term,w in [('conversation',100),('messages',80),('message',60),('chat',60),('history',50),('export',20),('json',10)]:
+                if term in lname: score+=w
+              if ext in text_ext: score+=5
+              rows.append({'index':i,'name':info.filename,'compressed_bytes':info.compress_size,'uncompressed_bytes':info.file_size,'crc':info.CRC,'compression':info.compress_type,'is_dir':info.is_dir(),'suffix':ext,'text_candidate':ext in text_ext,'priority_score':score})
+          priority=sorted(rows,key=lambda r:(-r['priority_score'],-r['uncompressed_bytes'],r['name']))
+          (out/'manifest.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf-8')
+          (out/'priority_manifest.json').write_text(json.dumps(priority,ensure_ascii=False,indent=2),encoding='utf-8')
+          summary={'zip_bytes':zpath.stat().st_size,'members':len(rows),'files':sum(not r['is_dir'] for r in rows),'dirs':sum(r['is_dir'] for r in rows),'uncompressed_total':sum(r['uncompressed_bytes'] for r in rows),'text_candidates':sum(r['text_candidate'] for r in rows),'extensions':collections.Counter(r['suffix'] or '<none>' for r in rows if not r['is_dir']).most_common(100),'top_priority':priority[:250]}
+          (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps({k:v for k,v in summary.items() if k not in ('extensions','top_priority')},indent=2))
+          for r in priority[:100]: print(r['priority_score'],r['uncompressed_bytes'],r['name'])
+          PY
+      - name: Upload inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-zip-inventory
+          path: out/
+          retention-days: 7
+          if-no-files-found: error
