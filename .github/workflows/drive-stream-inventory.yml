@@ -1,0 +1,101 @@
+name: Drive ZIP stream inventory
+
+on:
+  push:
+    branches: [drive-stream-worker]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FILE_ID: 1rONvxcNPn1r41h_ELj5IJ5d7keEmd6Uj
+  EXPECTED_SIZE: '1366761469'
+  ZIP_NAME: takeout-20250614T081435Z-1-008.zip
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install streaming tools
+        run: python -m pip install --disable-pip-version-check -q gdown ijson tqdm
+
+      - name: Download Drive blob sequentially to runner disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work out
+          python - <<'PY'
+          import os, pathlib, gdown
+          fid=os.environ['FILE_ID']
+          path=pathlib.Path('work')/os.environ['ZIP_NAME']
+          out=gdown.download(id=fid, output=str(path), quiet=False, resume=True)
+          if not out:
+              raise SystemExit('gdown failed')
+          got=path.stat().st_size
+          exp=int(os.environ['EXPECTED_SIZE'])
+          print('downloaded_bytes=', got)
+          if got != exp:
+              raise SystemExit(f'size mismatch: got {got}, expected {exp}')
+          PY
+
+      - name: Parse ZIP central directory and classify members
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, json, zipfile, pathlib, hashlib, collections, csv
+          zpath=pathlib.Path('work')/os.environ['ZIP_NAME']
+          out=pathlib.Path('out'); out.mkdir(exist_ok=True)
+          text_ext={'.json','.jsonl','.ndjson','.txt','.csv','.tsv','.md','.html','.htm','.xml','.yaml','.yml','.log'}
+          rows=[]
+          with zipfile.ZipFile(zpath,'r') as zf:
+              for i,info in enumerate(zf.infolist()):
+                  p=pathlib.PurePosixPath(info.filename)
+                  ext=p.suffix.lower()
+                  lname=info.filename.lower()
+                  score=0
+                  for term,w in [('conversation',100),('messages',80),('message',60),('chat',60),('history',50),('export',20),('json',10)]:
+                      if term in lname: score+=w
+                  if ext in text_ext: score+=5
+                  rows.append({
+                      'index':i,'name':info.filename,'compressed_bytes':info.compress_size,
+                      'uncompressed_bytes':info.file_size,'crc':info.CRC,'compression':info.compress_type,
+                      'is_dir':info.is_dir(),'suffix':ext,'text_candidate':ext in text_ext,'priority_score':score
+                  })
+          rows_sorted=sorted(rows,key=lambda r:(-r['priority_score'],-r['uncompressed_bytes'],r['name']))
+          (out/'manifest.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf-8')
+          (out/'priority_manifest.json').write_text(json.dumps(rows_sorted,ensure_ascii=False,indent=2),encoding='utf-8')
+          with (out/'manifest.tsv').open('w',encoding='utf-8',newline='') as f:
+              w=csv.DictWriter(f,fieldnames=list(rows[0].keys()) if rows else ['index'],delimiter='\t'); w.writeheader(); w.writerows(rows)
+          counts=collections.Counter(r['suffix'] or '<none>' for r in rows if not r['is_dir'])
+          summary={
+              'zip_file':str(zpath),'zip_bytes':zpath.stat().st_size,'members':len(rows),
+              'files':sum(not r['is_dir'] for r in rows),'dirs':sum(r['is_dir'] for r in rows),
+              'compressed_total':sum(r['compressed_bytes'] for r in rows),
+              'uncompressed_total':sum(r['uncompressed_bytes'] for r in rows),
+              'text_candidates':sum(r['text_candidate'] for r in rows),
+              'extensions':counts.most_common(100),
+              'top_priority':rows_sorted[:200],
+          }
+          (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps({k:v for k,v in summary.items() if k not in ('top_priority','extensions')},indent=2))
+          print('TOP PRIORITY MEMBERS')
+          for r in rows_sorted[:80]:
+              print(r['priority_score'], r['uncompressed_bytes'], r['name'])
+          PY
+
+      - name: Upload inventory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-zip-inventory
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
