@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOCAL_RTMP_PORT="\${1:-1935}"
+LOCAL_RTMP_PORT="${1:-1935}"
 
 if ! command -v ssh >/dev/null 2>&1; then
   echo "OpenSSH client is required."
   exit 1
 fi
 
-echo "Opening a temporary free raw-TCP tunnel to local RTMP port \${LOCAL_RTMP_PORT}."
+echo "Opening a temporary free raw-TCP tunnel to local RTMP port ${LOCAL_RTMP_PORT}."
 echo "Pinggy free tunnels expire after 60 minutes and the public host/port changes on reconnect."
 echo
 echo "When Pinggy prints:"
@@ -24,5 +24,5 @@ exec ssh \
   -o ServerAliveCountMax=3 \
   -o ExitOnForwardFailure=yes \
   -p 443 \
-  -R0:127.0.0.1:\${LOCAL_RTMP_PORT} \
+  -R0:127.0.0.1:${LOCAL_RTMP_PORT} \
   tcp@free.pinggy.io
