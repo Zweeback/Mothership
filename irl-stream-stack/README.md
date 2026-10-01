@@ -1,64 +1,114 @@
 # IRL Quality Offensive — self-hosted Restream replacement
 
-Primary stream core: **Muxshed**
+## Production core: Muxshed
+
+First path, deliberately kept simple:
+
+```
+GoPro HERO13
+   -> Pixel hotspot / mobile data
+   -> RTMP
+   -> Muxshed
+   -> Twitch / YouTube / Kick
+```
+
+No Pixel VM relay. No local MediaMTX. No local FFmpeg listener.
+
+Muxshed provides:
 - RTMP ingest on TCP/1935
-- SRT ingest on UDP/9000
-- browser production UI/API on TCP/8080
-- fan-out to Twitch, YouTube, Kick, and custom RTMP/RTMPS
-- failover/BRB, scenes, browser/media sources, audio mixing and recording
+- SRT ingest on UDP/9000 for a later upgrade
+- browser UI/API on TCP/8080
+- Twitch / YouTube / Kick / custom RTMP fan-out
+- scenes, browser/media sources, audio mixing
+- IRL program failover / BRB
+- local recording
 
-IRL telemetry layer: **RatoNet**
-- GPS / speed / altitude / heading
-- live map + route
-- WebSocket telemetry
-- browser overlays
-- SRT/SRTLA support for a later bonded uplink
+## Verified on 2026-10-01
 
-First production path:
+This is no longer just a design:
 
-GoPro HERO13 -> Pixel hotspot/mobile data -> public Muxshed RTMP endpoint -> Twitch/YouTube/Kick
+- Upstream Muxshed Rust tests were executed in an existing cloud runtime:
+  - 14 API/unit tests: pass
+  - 32 API integration tests: pass
+  - 12 common/type tests: pass
+- A real Muxshed process was started headless.
+- An RTMP source was created through its API.
+- FFmpeg published H.264 + AAC into that source.
+- Muxshed reported the source as `live`.
+- A local RTMP destination was created.
+- Muxshed started an egress pipeline to that destination.
+- A second FFmpeg process received the resulting 1920x1080 H.264 + AAC RTMP stream.
 
-No Pixel VM relay, no local MediaMTX, no local FFmpeg listener.
+That proves the important chain:
 
-## Host requirements
+```
+RTMP publisher -> Muxshed ingest -> program pipeline -> RTMP destination
+```
 
-Public Linux host with:
-- public IPv4 or public TCP proxy
-- TCP 1935 reachable from the Internet
-- TCP 8080 for Muxshed UI/API
-- TCP 8000 for RatoNet UI/API
-- Docker 24+ / Docker Compose
-- recommended for building both projects: 2 vCPU / 4 GB RAM
+## One-command VPS bootstrap
 
-Later:
-- UDP 9000 for SRT
-- UDP 5001 for SRTLA
-- TCP 8443 for WebRTC signalling
+Run:
 
-Run `bootstrap.sh` on the VPS.
+```bash
+sudo ./bootstrap.sh
+```
 
-## GoPro / Pixel networking
+It installs Docker, builds Muxshed, opens the required firewall ports, generates an API key, creates a GoPro RTMP source through the real API, and writes the generated stream key to:
 
-The Pixel hotspot credentials and the GoPro camera's own Wi-Fi credentials are different things.
+```
+/opt/irl-stack/gopro-source.env
+```
 
-For streaming, GoPro Quik configures the camera to join the **Pixel hotspot** as the Internet uplink. The camera's own SSID/password are for pairing/control and are not RTMP server credentials.
+## Immediate free smoke test
 
-After Muxshed is online:
-1. Create an RTMP source in Muxshed.
-2. Copy the generated publish URL/key.
-3. In GoPro Quik -> Live -> RTMP/Other, choose the Pixel hotspot and enter the Muxshed publish URL.
-4. Start the first field test at 720p.
+`temporary-free-rtmp-tunnel.sh` exposes an already-running local Muxshed RTMP port through a free Pinggy TCP tunnel.
 
-## Current infrastructure findings — 2026-10-01
+The free Pinggy endpoint:
+- is real raw TCP, so GoPro RTMP can use it
+- needs no HTTP conversion
+- expires after 60 minutes
+- changes hostname/port on reconnect
 
-- Railway: refuses new resources because the trial expired.
-- Render: Frankfurt services exist, but public Render web services do not expose raw RTMP TCP/1935.
-- DigitalOcean: connector is authenticated, but the account reports a droplet-limit warning while listing zero visible droplets; do not provision blindly.
-- Fly Sprites: existing sprites are available, but public service exposure is HTTP-oriented rather than a direct raw RTMP endpoint.
+It is for proving the GoPro path, not the permanent deployment.
 
-Remaining hard requirement: one public raw-TCP host.
+## Free-runtime findings
+
+### Google Colab
+Not a server target. Google's current Colab policy explicitly prohibits media serving / general web-service offerings on managed runtimes and restricts remote proxies. It is useful for builds and analysis, not this RTMP ingress.
+
+### Google Cloud Free Tier
+Compute Engine offers one free `e2-micro` per month in selected US regions, but the free Compute Engine allowance includes only 1 GB/month outbound transfer. Multistream video burns through that quickly, so it is a poor permanent relay even though the VM can expose TCP/1935.
+
+### SuperGrok / Grok Bot
+An eligible SuperGrok subscription can link to Grok Bot, which provides a persistent cloud computer with a browser, filesystem and terminal. That is useful as a build/test/orchestration worker. The public docs do not promise a raw public TCP ingress address, so it is not being treated as the production RTMP endpoint without evidence.
+
+### GitHub Codespaces
+Ports can be made public, but the externally exposed endpoint is a GitHub HTTP/HTTPS forwarding URL. Useful for dashboards, not a plain RTMP listener for a GoPro.
+
+### Oracle Cloud Always Free
+This is the strongest no-new-monthly-cost production target found:
+- Ampere A1 Always Free compute
+- up to 2 OCPUs / 12 GB RAM under the documented free allocation
+- public networking
+- first 10 TB/month public internet egress free
+
+That egress allowance actually fits multistream video in a way Google Cloud's 1 GB free Compute egress does not.
+
+## RatoNet status
+
+RatoNet remains the candidate for GPS / speed / map / overlays.
+
+Its upstream tests were run:
+- **47 passed**
+
+But a runtime defect was also reproduced: the documented flat `.env` variables are currently rejected by the root Pydantic Settings object as `extra_forbidden`. So RatoNet is not in the production bootstrap yet. It will be added after that config path is patched and startup is re-tested.
 
 ## Security
 
-Never commit Twitch/YouTube/Kick stream keys, Muxshed API keys, hotspot passwords, or GoPro Wi-Fi passwords.
-`bootstrap.sh` creates runtime secrets locally on the host in `/opt/irl-stack/runtime-secrets.env`.
+Never commit:
+- Twitch / YouTube / Kick stream keys
+- Muxshed API keys
+- Pixel hotspot password
+- GoPro Wi-Fi password
+
+The bootstrap generates runtime credentials locally on the host.
