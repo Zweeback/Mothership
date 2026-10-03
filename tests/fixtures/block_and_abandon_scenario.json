@@ -1,0 +1,67 @@
+{
+  "scenario": "assistant_block_claim_abandonment_and_rediscovery",
+  "description": "Models a sequence where an automated assistant or tool claims a block, abandons a feature branch without generating artifacts or updating main, and the effort is later rediscovered on an unmerged branch.",
+  "events": [
+    {
+      "event_id": "evt-001",
+      "timestamp": "2026-08-15T02:44:03Z",
+      "actor": "copilot-swe-agent[bot]",
+      "branch": "origin/build/dortmund-godot-apk",
+      "action": "commit",
+      "commit_sha": "615fe99c5f8f0a81ec9c4cbc605b0226c62d3d04",
+      "claim": "Completed Android ETC2 export and rebuilt APK",
+      "status": "completed",
+      "artifact_produced": true,
+      "merged_to_main": false
+    },
+    {
+      "event_id": "evt-002",
+      "timestamp": "2026-08-15T03:10:00Z",
+      "actor": "assistant-worker-1",
+      "branch": "copilot/build-provenance-gap-scanner",
+      "action": "task_claim",
+      "claim": "Blocked by missing Godot 4.7.1 editor binary and missing 3D model asset in root catalog",
+      "status": "blocked",
+      "artifact_produced": false,
+      "merged_to_main": false,
+      "abandoned": true
+    },
+    {
+      "event_id": "evt-003",
+      "timestamp": "2026-08-15T04:26:12Z",
+      "actor": "Benjamin Carl",
+      "branch": "godot/dortmund-master",
+      "action": "commit",
+      "commit_sha": "d1e3a17d2f748aec3a6b2c3febd2d117822a3b91",
+      "claim": "Added Drive fallback for Dortmund full-model asset and Godot scripts in godot/dortmund/",
+      "status": "completed",
+      "artifact_produced": true,
+      "merged_to_main": false
+    },
+    {
+      "event_id": "evt-004",
+      "timestamp": "2026-10-03T00:11:28Z",
+      "actor": "copilot-swe-agent[bot]",
+      "branch": "copilot/build-provenance-gap-scanner",
+      "action": "commit",
+      "commit_sha": "d74ef50d8dedb8f0ae49d26f2c4299a1870da5c0",
+      "claim": "Initial plan created, but no scanner or code added",
+      "status": "stalled",
+      "artifact_produced": false,
+      "merged_to_main": false
+    },
+    {
+      "event_id": "evt-005",
+      "timestamp": "2026-10-03T10:00:00Z",
+      "actor": "provenance-auditor",
+      "action": "rediscovery",
+      "target_branch": "godot/dortmund-master",
+      "rediscovered_artifacts": [
+        "godot/dortmund/project.godot",
+        "godot/dortmund/scripts/main.gd",
+        ".github/workflows/dortmund-full-apk.yml"
+      ],
+      "finding": "Task was falsely marked as blocked by worker; code and CI workflows existed on isolated unmerged branch godot/dortmund-master"
+    }
+  ]
+}
