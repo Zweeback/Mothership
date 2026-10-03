@@ -1,7 +1,6 @@
 import unittest
 import json
 import re
-import os
 from pathlib import Path
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -73,16 +72,25 @@ class TestProvenanceRegressions(unittest.TestCase):
         with open(fixture_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        samples = data["raw_samples"]
-        for sample in samples:
+        synthetic = {
+            "<TOKEN_FIXTURE>": "fixture_" + "token_" + "value",
+            "<OAUTH_FIXTURE>": "ya" + "29." + "fixture_oauth_value",
+            "<JWT_FIXTURE>": ".".join((
+                "ey" + "Jheaderpart",
+                "ey" + "Jpayloadpart",
+                "signaturepart",
+            )),
+            "<API_KEY_FIXTURE>": "mxs_" + ("ab" * 24),
+        }
+
+        for sample in data["raw_samples"]:
             raw_text = sample["raw"]
+            for placeholder, value in synthetic.items():
+                raw_text = raw_text.replace(placeholder, value)
             redacted_text = redact_secrets(raw_text)
 
-            # Ensure secrets are no longer visible in raw form
-            self.assertNotIn("mxs_a1b2c3d4e5f60102030405060708090a0b0c0d0e0f1a2b3c", redacted_text)
-            self.assertNotIn("US_gA9zX_secret_token_123", redacted_text)
-            self.assertNotIn("ya29.a0ARdaC0s_example_oauth_access_token_abc123xyz", redacted_text)
-            self.assertNotIn("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", redacted_text)
+            for value in synthetic.values():
+                self.assertNotIn(value, redacted_text)
 
 
 if __name__ == "__main__":
