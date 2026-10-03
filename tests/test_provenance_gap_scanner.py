@@ -76,5 +76,54 @@ class ProvenanceGapScannerTests(unittest.TestCase):
             self.assertEqual(len(_read_records(jsonl_path)), 2)
 
 
+    def test_splits_concatenated_urls_and_marks_capture_damage(self):
+        raw = (
+            "noise https://chatgpt.com/c/"
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            "https://example.com/item tail"
+        )
+        catalog = [{
+            "conversation_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        }]
+        items = scan_records([{"trace": raw}], catalog)
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(
+            items[0]["artifact_id"],
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+        self.assertEqual(items[0]["evidence_state"], "RESOLVED")
+        self.assertEqual(items[1]["url"], "https://example.com/item")
+        self.assertTrue(
+            all("CAPTURE_DAMAGED" in item["flags"] for item in items)
+        )
+
+    def test_local_chatgpt_is_a_conversation_not_external(self):
+        item = scan_records([{
+            "url": "local-chatgpt:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        }], [])[0]
+
+        self.assertEqual(item["provider"], "local-chatgpt")
+        self.assertEqual(item["artifact_type"], "chatgpt_conversation")
+        self.assertEqual(
+            item["artifact_id"],
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+        self.assertNotIn("EXTERNAL", item["flags"])
+
+    def test_markdown_report_neutralizes_record_injection(self):
+        items = scan_records([{
+            "artifact_id": "evidence" + "`" + "\n## Forged section"
+        }], [])
+        with tempfile.TemporaryDirectory() as directory:
+            write_reports(items, Path(directory))
+            report = (
+                Path(directory) / "delta.md"
+            ).read_text(encoding="utf-8")
+
+        self.assertNotIn("\n## Forged section", report)
+        self.assertIn("evidence\\` ## Forged section", report)
+
+
 if __name__ == "__main__":
     unittest.main()
