@@ -31,6 +31,7 @@ FLAGS = (
     "DEAD",
     "CATALOG_ABSENT",
     "SECRET_REDACTED",
+    "CAPTURE_DAMAGED",
 )
 REDACTED = "[REDACTED]"
 SECRET_PARAMETER = re.compile(
@@ -56,7 +57,11 @@ SECRET_TEXT_PARAMETER = re.compile(
     r"x-goog-(?:credential|signature))\s*[=:]\s*)"
     r"([^&\s,;]+)"
 )
-URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+URL_PATTERN = re.compile(
+    r"(?:https?://|local-chatgpt:(?://)?).*?"
+    r"(?=(?:https?://|local-chatgpt:(?://)?)|[\\s<>\\\"']|$)",
+    re.IGNORECASE,
+)
 
 
 class ResolutionAdapter(Protocol):
@@ -150,28 +155,62 @@ def _value(row: dict, *names: str) -> str:
     return ""
 
 
-def _find_url(row: dict) -> str:
+def _find_urls(row: dict) -> list[str]:
+    """Extract every URL from one capture, including concatenated URLs."""
     candidate = _value(row, "url", "link", "uri", "href", "trace")
-    if candidate:
-        match = URL_PATTERN.search(candidate)
-        return match.group(0).rstrip(".,);]") if match else candidate
-    for value in row.values():
-        if isinstance(value, str):
-            match = URL_PATTERN.search(value)
-            if match:
-                return match.group(0).rstrip(".,);]")
-    return ""
+    values = [candidate] if candidate else []
+    values.extend(
+        value for value in row.values()
+        if isinstance(value, str) and value != candidate
+    )
+    for value in values:
+        matches = [
+            match.group(0).rstrip(".,);]")
+            for match in URL_PATTERN.finditer(value)
+        ]
+        if matches:
+            return list(dict.fromkeys(matches))
+    return [candidate] if candidate else []
+
+
+def _expand_trace_records(records: list[dict]) -> list[dict]:
+    """Split a damaged capture into trace fragments without losing metadata."""
+    expanded = []
+    for row in records:
+        urls = _find_urls(row)
+        if len(urls) <= 1:
+            expanded.append(row)
+            continue
+        for index, url in enumerate(urls, start=1):
+            item = dict(row)
+            item["url"] = url
+            item["capture_fragment_index"] = index
+            item["capture_fragment_count"] = len(urls)
+            expanded.append(item)
+    return expanded
+
+
+def _find_url(row: dict) -> str:
+    urls = _find_urls(row)
+    return urls[0] if urls else ""
 
 
 def _classify_url(url: str, row: dict) -> tuple[str, str, set[str], str]:
     parsed = urlsplit(url)
+    local_chatgpt = parsed.scheme.lower() == "local-chatgpt"
     host = (parsed.hostname or "").lower()
-    provider = _value(row, "provider") or host
+    provider = _value(row, "provider") or (
+        "local-chatgpt" if local_chatgpt else host
+    )
     explicit_type = _value(row, "artifact_type", "type")
     path_parts = [part for part in parsed.path.split("/") if part]
-    chatgpt = host in {"chatgpt.com", "www.chatgpt.com", "chat.openai.com"}
-    conversation_id = ""
-    if chatgpt:
+    chatgpt = local_chatgpt or host in {
+        "chatgpt.com", "www.chatgpt.com", "chat.openai.com"
+    }
+    conversation_id = (
+        parsed.netloc or (path_parts[0] if path_parts else "")
+    ) if local_chatgpt else ""
+    if chatgpt and not conversation_id:
         for index, part in enumerate(path_parts[:-1]):
             if part.lower() in {"c", "conversation", "conversations", "share"}:
                 conversation_id = path_parts[index + 1]
@@ -193,6 +232,8 @@ def _classify_url(url: str, row: dict) -> tuple[str, str, set[str], str]:
         flags.add("EPHEMERAL")
     if any(term in host_and_path for term in ("login", "oauth", "authorize")):
         flags.add("AUTH_REQUIRED")
+    if int(_value(row, "capture_fragment_count") or "0") > 1:
+        flags.add("CAPTURE_DAMAGED")
     return provider, artifact_type, flags, artifact_id
 
 
@@ -252,7 +293,10 @@ def scan_records(
         if item["artifact_id"]:
             catalog_ids.add(item["artifact_id"])
 
-    items = [_normalize(row, resolver) for row in trace_records]
+    items = [
+        _normalize(row, resolver)
+        for row in _expand_trace_records(trace_records)
+    ]
     counts = {}
     for item in items:
         if item["artifact_id"]:
@@ -290,12 +334,14 @@ def write_reports(items: list[dict], output_dir: Path) -> None:
 
     gaps = [item for item in items if "CATALOG_ABSENT" in item["flags"]]
     duplicates = sum("DUPLICATE" in item["flags"] for item in items)
+    damaged = sum("CAPTURE_DAMAGED" in item["flags"] for item in items)
     lines = [
         "# Provenance delta",
         "",
         f"- Scanned: {len(items)}",
         f"- Catalog gaps: {len(gaps)}",
         f"- Duplicate records: {duplicates}",
+        f"- Capture-damaged fragments: {damaged}",
         "",
         "Catalog gaps indicate items absent from the supplied catalog; they do not imply deletion or manipulation.",
     ]
@@ -303,6 +349,7 @@ def write_reports(items: list[dict], output_dir: Path) -> None:
         lines.extend(["", "## Missing from catalog"])
         for item in gaps:
             label = item["artifact_id"] or item["url"] or "(unidentified artifact)"
+            label = label.replace("`", "\\`").replace("\\r", " ").replace("\\n", " ")
             lines.append(f"- `{label}` ({item['provider'] or 'unknown provider'})")
     (output_dir / "delta.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
