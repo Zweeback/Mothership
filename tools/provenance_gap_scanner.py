@@ -59,7 +59,7 @@ SECRET_TEXT_PARAMETER = re.compile(
 )
 URL_PATTERN = re.compile(
     r"(?:https?://|local-chatgpt:(?://)?).*?"
-    r"(?=(?:https?://|local-chatgpt:(?://)?)|[\\s<>\\\"']|$)",
+    r"(?=(?:https?://|local-chatgpt:(?://)?)|[\s<>\"']|$)",
     re.IGNORECASE,
 )
 
@@ -349,7 +349,7 @@ def write_reports(items: list[dict], output_dir: Path) -> None:
         lines.extend(["", "## Missing from catalog"])
         for item in gaps:
             label = item["artifact_id"] or item["url"] or "(unidentified artifact)"
-            label = label.replace("`", "\\`").replace("\\r", " ").replace("\\n", " ")
+            label = label.replace("`", "\\`").replace("\r", " ").replace("\n", " ")
             lines.append(f"- `{label}` ({item['provider'] or 'unknown provider'})")
     (output_dir / "delta.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
