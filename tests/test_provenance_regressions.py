@@ -12,7 +12,9 @@ SAMPLE_OAUTH_TOKEN = "ya29" + ".a0ARdaC0s_example_oauth_access_token_abc123xyz"
 SAMPLE_JWT_HEADER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
 SAMPLE_JWT_PAYLOAD = "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
 SAMPLE_JWT_SIGNATURE = "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-SAMPLE_JWT_TOKEN = f"{SAMPLE_JWT_HEADER}.{SAMPLE_JWT_PAYLOAD}.{SAMPLE_JWT_SIGNATURE}"
+SAMPLE_JWT_TOKEN = ".".join(
+    (SAMPLE_JWT_HEADER, SAMPLE_JWT_PAYLOAD, SAMPLE_JWT_SIGNATURE)
+)
 SAMPLE_GDRIVE_TOKEN = "_".join(("US", "gA9zX", "secret", "token", "123"))
 
 
@@ -47,15 +49,17 @@ def materialize_sample(sample: dict) -> str:
         "gdrive_signed_url": (
             "https://drive.google.com/uc?export=download"
             "&id=1rONvxcNPn1r41h_ELj5IJ5d7keEmd6Uj"
-            f"&confirm=t&token={SAMPLE_GDRIVE_TOKEN}"
+            "&confirm=t&token=" + SAMPLE_GDRIVE_TOKEN
         ),
-        "pinggy_rtmp_tunnel": f"rtmp://tcp.pinggy.link:43210/live/{SAMPLE_MUXSHED_KEY}",
-        "oauth_bearer_header": f"Authorization: Bearer {SAMPLE_OAUTH_TOKEN}",
-        "jwt_bearer_header": f"Authorization: Bearer {SAMPLE_JWT_TOKEN}",
-        "muxshed_api_key": f"MUXSHED_API_KEY={SAMPLE_MUXSHED_KEY}",
+        "pinggy_rtmp_tunnel": (
+            "rtmp://tcp.pinggy.link:43210/live/" + SAMPLE_MUXSHED_KEY
+        ),
+        "oauth_bearer_header": "Authorization: Bearer " + SAMPLE_OAUTH_TOKEN,
+        "jwt_bearer_header": "Authorization: Bearer " + SAMPLE_JWT_TOKEN,
+        "muxshed_api_key": "MUXSHED_API_KEY=" + SAMPLE_MUXSHED_KEY,
     }
     if generator not in generated:
-        raise AssertionError(f"Unknown sample generator: {generator!r}")
+        raise AssertionError("Unknown sample generator: " + repr(generator))
     return generated[generator]
 
 
@@ -63,7 +67,7 @@ class TestProvenanceRegressions(unittest.TestCase):
 
     def test_block_and_abandon_fixture(self):
         fixture_path = FIXTURES_DIR / "block_and_abandon_scenario.json"
-        self.assertTrue(fixture_path.exists(), f"Missing fixture file: {fixture_path}")
+        self.assertTrue(fixture_path.exists(), "Missing fixture file: " + str(fixture_path))
         with open(fixture_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -81,7 +85,7 @@ class TestProvenanceRegressions(unittest.TestCase):
 
     def test_catalog_vs_deleted_fixture(self):
         fixture_path = FIXTURES_DIR / "catalog_vs_deleted_scenario.json"
-        self.assertTrue(fixture_path.exists(), f"Missing fixture file: {fixture_path}")
+        self.assertTrue(fixture_path.exists(), "Missing fixture file: " + str(fixture_path))
         with open(fixture_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -103,7 +107,7 @@ class TestProvenanceRegressions(unittest.TestCase):
 
     def test_ephemeral_secrets_redaction(self):
         fixture_path = FIXTURES_DIR / "ephemeral_secrets_scenario.json"
-        self.assertTrue(fixture_path.exists(), f"Missing fixture file: {fixture_path}")
+        self.assertTrue(fixture_path.exists(), "Missing fixture file: " + str(fixture_path))
         with open(fixture_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -118,9 +122,9 @@ class TestProvenanceRegressions(unittest.TestCase):
             self.assertNotIn(SAMPLE_JWT_TOKEN, redacted_text)
 
         fixture_serialized = json.dumps(data, sort_keys=True)
-        self.assertNotIn("{MUXSHED_KEY}", fixture_serialized)
-        self.assertNotIn("{OAUTH_TOKEN}", fixture_serialized)
-        self.assertNotIn("{JWT_TOKEN}", fixture_serialized)
+        for token_name in ("MUXSHED_KEY", "OAUTH_TOKEN", "JWT_TOKEN"):
+            template_token = "{" + token_name + "}"
+            self.assertNotIn(template_token, fixture_serialized)
 
 
 if __name__ == "__main__":
