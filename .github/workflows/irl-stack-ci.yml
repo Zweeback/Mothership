@@ -1,0 +1,22 @@
+name: IRL stream stack CI
+
+on:
+  pull_request:
+    paths:
+      - "irl-stream-stack/**"
+      - ".github/workflows/irl-stack-ci.yml"
+  push:
+    paths:
+      - "irl-stream-stack/**"
+      - ".github/workflows/irl-stack-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify bootstrap contract
+        run: ./irl-stream-stack/test-bootstrap-contract.sh
