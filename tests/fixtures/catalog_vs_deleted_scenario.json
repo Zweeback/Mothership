@@ -1,0 +1,58 @@
+{
+  "scenario": "catalog_missing_vs_deleted_distinction",
+  "description": "Differentiates between files missing from the main branch catalog (branch-isolated/unmerged), files actually deleted in a git commit on main, and non-existent files.",
+  "items": [
+    {
+      "path": "docs/status/current.json",
+      "status_in_main": "catalog_missing",
+      "status_in_branches": {
+        "origin/infra/current-visual-status": "present",
+        "main": "missing"
+      },
+      "actual_state": "branch_isolated",
+      "deleted_by_commit": null,
+      "explanation": "File exists on origin/infra/current-visual-status (commit cc54ea2) but was never merged to main."
+    },
+    {
+      "path": ".github/workflows/drive-stream-inventory.yml",
+      "status_in_main": "deleted",
+      "status_in_branches": {
+        "origin/drive-stream-worker": "present",
+        "main": "deleted"
+      },
+      "actual_state": "deleted_on_main_head",
+      "deleted_by_commit": "08a2c28647eeb6c747fc30ae5e2cdae369a781c9",
+      "explanation": "File was introduced in commit 170ac6e on main and explicitly deleted in commit 08a2c28 on main."
+    },
+    {
+      "path": "irl-stream-stack/bootstrap.sh",
+      "status_in_main": "catalog_missing",
+      "status_in_branches": {
+        "origin/feat/irl-quality-offensive": "present",
+        "main": "missing"
+      },
+      "actual_state": "branch_isolated",
+      "deleted_by_commit": null,
+      "explanation": "File exists on origin/feat/irl-quality-offensive (commit 8d37002) but was never merged into main."
+    },
+    {
+      "path": "builds/gapguard/source.b64.part1",
+      "status_in_main": "catalog_missing",
+      "status_in_branches": {
+        "origin/gapguard-apk-build": "present",
+        "main": "missing"
+      },
+      "actual_state": "branch_isolated",
+      "deleted_by_commit": null,
+      "explanation": "File exists on origin/gapguard-apk-build (commit 5daa2e8) but was never merged to main."
+    },
+    {
+      "path": "non_existent_file.txt",
+      "status_in_main": "missing",
+      "status_in_branches": {},
+      "actual_state": "never_existed",
+      "deleted_by_commit": null,
+      "explanation": "File never existed in any git object or branch."
+    }
+  ]
+}
