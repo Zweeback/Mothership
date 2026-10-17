@@ -1,0 +1,8 @@
+{
+  "kind": "no-runnable-visual",
+  "project": "Mothership",
+  "stage": "PROTOTYPE",
+  "next_acceptance_gate": "Recover the canonical Godot project and prove one scientific cell slice",
+  "runtime_verified": false,
+  "accent": "#8b5cf6"
+}
