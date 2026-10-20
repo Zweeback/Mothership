@@ -1,0 +1,38 @@
+name: Build GLaDOS German Reader APK
+on:
+  push:
+    paths:
+      - 'apps/glados-reader/**'
+      - '.github/workflows/glados-de-apk.yml'
+  pull_request:
+    paths:
+      - 'apps/glados-reader/**'
+      - '.github/workflows/glados-de-apk.yml'
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Test core Java logic
+        run: |
+          mkdir -p /tmp/robot-tests
+          javac -d /tmp/robot-tests apps/glados-reader/app/src/main/java/de/bentropie/gladosvoice/TextChunks.java apps/glados-reader/app/src/main/java/de/bentropie/gladosvoice/RobotFx.java apps/glados-reader/tools/LocalTests.java
+          java -cp /tmp/robot-tests LocalTests
+      - name: Build APK
+        run: gradle -p apps/glados-reader --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glados-de-reader-debug-apk
+          path: apps/glados-reader/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
