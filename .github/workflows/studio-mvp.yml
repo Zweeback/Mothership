@@ -1,0 +1,36 @@
+name: Studio MVP checks
+on:
+  push:
+    paths:
+      - "index.html"
+      - "studio/**"
+      - "tests/studio.test.js"
+      - ".github/workflows/studio-mvp.yml"
+  pull_request:
+    paths:
+      - "index.html"
+      - "studio/**"
+      - "tests/studio.test.js"
+      - ".github/workflows/studio-mvp.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: |
+          node --check studio/core.js
+          node --check studio/app.js
+          node --check tests/studio.test.js
+      - name: Test state engine and static integration
+        run: node --test tests/studio.test.js

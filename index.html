@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="description" content="Mothership Studio MVP: Ideenlabor, Produktionen, Abteilungsübergaben, Assets und Nachweise.">
+  <title>MOTHERSHIP / Studio OS</title>
+  <style>
+    :root{color-scheme:dark;--bg:#090d17;--panel:#121a2a;--panel2:#161f31;--line:#2b3950;--text:#f0f2f7;--muted:#96a5bb;--accent:#eebd7c;--cyan:#81dbd7;--red:#ff8e8e;--shadow:0 16px 44px #03071177}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(ellipse at 70% -15%,#293045 0,transparent 48%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text);min-height:100vh}
+    a{color:var(--cyan);text-decoration:none}a:hover{text-decoration:underline}button,input,select,textarea{font:inherit}
+    button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+    .shell{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:100vh}
+    aside{background:#0a101ccc;border-right:1px solid var(--line);padding:28px 17px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+    .brand{display:flex;align-items:center;gap:13px;padding:5px 9px 29px;border-bottom:1px solid var(--line)}
+    .brand-mark{height:41px;width:41px;display:grid;place-items:center;color:#111827;font-weight:1000;background:linear-gradient(130deg,#f8d69d,#c78c5e);clip-path:polygon(50% 0,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%)}
+    .brand strong{font-size:15px;letter-spacing:.18em}.brand small{display:block;color:var(--muted);letter-spacing:.2em;font-size:10px;margin-top:4px}
+    .nav-label{font-size:10px;letter-spacing:.2em;color:#778aa6;text-transform:uppercase;padding:27px 12px 12px}
+    .nav{display:grid;gap:5px}
+    .nav button{display:flex;align-items:center;gap:11px;width:100%;padding:13px 14px;border:1px solid transparent;background:transparent;color:var(--muted);border-radius:10px;text-align:left;font-weight:600;font-size:13px}
+    .nav button.active{background:#263044;color:var(--text);border-color:#39475c}.nav button:hover{background:#1c2637;color:#fff}
+    .nav button span{font-size:18px;display:inline-block;width:25px;color:var(--accent)}
+    .side-bottom{margin-top:auto;border-top:1px solid var(--line);padding:22px 12px 0;color:var(--muted);font-size:12px;line-height:1.6}
+    .live-dot{height:7px;width:7px;border-radius:50%;background:#98dabb;display:inline-block;margin-right:6px;box-shadow:0 0 12px #78dabc88}
+    main{width:min(1420px,100%);margin:auto;padding:32px clamp(18px,3.6vw,56px) 65px}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line);padding:0 0 27px;margin-bottom:34px}
+    .eyebrow{color:var(--accent);font-size:11px;letter-spacing:.22em;font-weight:800;text-transform:uppercase}
+    h1{font-size:clamp(29px,4vw,48px);font-weight:760;letter-spacing:-.055em;margin:8px 0 8px}
+    h2{font-size:19px;letter-spacing:-.025em;margin:0 0 20px}
+    h3{font-size:15px;margin:0 0 8px}.sub{color:var(--muted);font-size:14px;line-height:1.6;margin:0}
+    .status-pill{border:1px solid #3b5264;border-radius:100px;padding:10px 13px;color:#c1e6dc;font-size:11px;font-weight:700;white-space:nowrap}
+    .hero{background:linear-gradient(115deg,#273041,#171d2f 63%,#101824);border:1px solid #40485a;box-shadow:var(--shadow);border-radius:17px;padding:clamp(22px,3vw,34px);display:flex;justify-content:space-between;align-items:center;gap:30px;position:relative;overflow:hidden}
+    .hero:after{content:"M";position:absolute;right:27px;top:-72px;font-size:280px;color:#ffffff08;font-weight:900;pointer-events:none}
+    .hero h2{font-size:clamp(22px,3vw,33px);letter-spacing:-.045em;margin:12px 0}.hero p{max-width:610px;color:#b9c5d5;font-size:14px;line-height:1.7}
+    .btn{border:1px solid #53657b;border-radius:10px;padding:11px 15px;color:var(--text);background:#263249;font-size:12px;font-weight:750;white-space:nowrap}
+    .btn:hover{filter:brightness(1.2)}.btn.primary{background:var(--accent);border-color:var(--accent);color:#1a1720}.btn.ghost{background:transparent}.btn.small{padding:8px 11px;font-size:11px}
+    .btn-row{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin:22px 0 30px}
+    .stat,.card{border:1px solid var(--line);border-radius:13px;background:linear-gradient(135deg,var(--panel),#101827);box-shadow:0 7px 20px #04071138}
+    .stat{padding:21px}.stat strong{display:block;font-size:32px;font-weight:770;letter-spacing:-.05em}.stat span{color:var(--muted);font-size:12px}
+    .grid-2{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);gap:18px}.card{padding:23px;margin-bottom:18px}
+    .card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:15px}
+    .item{border:1px solid #28364c;border-radius:11px;padding:17px;margin-bottom:10px;background:#151e2d}
+    .item:last-child{margin-bottom:0}.item-top{display:flex;justify-content:space-between;align-items:flex-start;gap:13px}
+    .item p{font-size:13px;color:#b4c2d4;line-height:1.65;margin:10px 0 14px;white-space:pre-wrap;overflow-wrap:anywhere}
+    .meta{color:var(--muted);font-size:11px;line-height:1.8;overflow-wrap:anywhere}
+    .tag{display:inline-block;border:1px solid #3d4b5e;color:#b7c5db;padding:3px 8px;border-radius:6px;letter-spacing:.07em;font-weight:700;font-size:10px;white-space:nowrap}
+    .tag.cyan{border-color:#366566;color:#9bded8}.tag.gold{border-color:#796047;color:#e9c293}
+    .empty{padding:33px 15px;text-align:center;border:1px dashed #38445b;border-radius:12px;color:var(--muted);font-size:13px;line-height:1.6}
+    .section-title{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:21px}
+    .section-title h2{font-size:24px;margin:0 0 4px}
+    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}
+    label{display:block;color:#bdcadb;font-size:12px;font-weight:650;margin-bottom:7px}
+    input,select,textarea{width:100%;border:1px solid #3a485e;background:#0d1522;border-radius:9px;padding:12px 13px;color:var(--text);min-width:0;outline:none}
+    textarea{min-height:102px;resize:vertical}.full{grid-column:1/-1}
+    form .btn-row{margin-top:17px}
+    .pillset{display:flex;gap:8px;flex-wrap:wrap}
+    .warning{font-size:12px;line-height:1.7;color:#d3bc94;background:#2c261e;border:1px solid #64513b;padding:13px 15px;border-radius:9px}
+    .notice{font-size:12px;color:#9fb1cb;line-height:1.7}.error{color:var(--red)}
+    .event{display:flex;gap:12px;padding:13px 0;border-top:1px solid #273449;font-size:12px;color:var(--muted)}
+    .event:first-child{border-top:0}.event strong{color:#d7e1ef}.event-time{margin-left:auto;white-space:nowrap;color:#73859c}
+    .toast{position:fixed;bottom:20px;right:20px;background:#233e43;color:#e0fffa;border:1px solid #528b83;padding:13px 18px;border-radius:10px;z-index:10;box-shadow:var(--shadow);max-width:440px}
+    .toast.bad{background:#4a2228;border-color:#97545b;color:#ffe2df}
+    [hidden]{display:none!important}
+    .footer{margin-top:30px;color:#75869d;font-size:12px;line-height:1.6}
+    @media(max-width:900px){.shell{grid-template-columns:1fr}aside{height:auto;position:static;padding:15px 17px}.brand{border:0;padding:0 0 15px}.nav-label,.side-bottom{display:none}.nav{display:flex;gap:5px;overflow-x:auto}.nav button{white-space:nowrap;width:auto;padding:10px 11px}.nav button span{width:auto}.topbar{margin-bottom:22px}.grid-2{grid-template-columns:1fr}}
+    @media(max-width:590px){main{padding:23px 15px 65px}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.stat{padding:16px}.stat strong{font-size:28px}.form-grid{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.hero:after{right:0;font-size:220px}.topbar{align-items:flex-start;flex-direction:column}.status-pill{margin-top:4px}.card{padding:17px}.item-top{flex-direction:column}.btn{white-space:normal}}
+    @media(prefers-reduced-motion:no-preference){.btn,.nav button{transition:background .18s,filter .18s}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><div class="brand-mark">M</div><div><strong>MOTHERSHIP</strong><small>STUDIO OPERATING SYSTEM</small></div></div>
+    <div class="nav-label">WORKSPACE / V0.1</div>
+    <nav class="nav" aria-label="Studiobereiche">
+      <button class="active" data-nav="home"><span>◈</span>Zentrale</button>
+      <button data-nav="ideas"><span>✧</span>Ideenlabor</button>
+      <button data-nav="projects"><span>▦</span>Produktionen</button>
+      <button data-nav="tasks"><span>⇄</span>Übergaben</button>
+      <button data-nav="assets"><span>⬡</span>Assets</button>
+      <button data-nav="data"><span>◇</span>Daten</button>
+    </nav>
+    <div class="side-bottom"><span class="live-dot"></span> LOKALER MVP<br>Speicherung in diesem Browser. Keine automatische Chat- oder GitHub-Synchronisierung.</div>
+  </aside>
+  <main>
+    <div class="topbar"><div><span class="eyebrow" id="breadcrumb">Studio / Überblick</span><h1 id="page-title">Die Studiozentrale.</h1><p class="sub" id="page-subtitle">Ein Ideenlabor. Viele Produktionen. Gemeinsame Ressourcen.</p></div><span class="status-pill">◉ STUDIO MVP · LOCAL</span></div>
+    <section class="view" id="view-home">
+      <div class="hero"><div><span class="eyebrow">PRODUKTIONSSYSTEM / 001</span><h2>Aus einer Idee wird ein überprüfbares Ergebnis.</h2><p>Ideen erfassen, Produktionen anlegen, Aufträge an Fachabteilungen übergeben und Assets mit Herkunft und Prüfvermerken registrieren. Keine erfundenen Fertigmeldungen.</p><div class="btn-row"><button class="btn primary" data-go="ideas">+ Idee entwickeln</button><button class="btn ghost" data-go="tasks">Übergaben ansehen</button></div></div></div>
+      <div class="stats"><div class="stat"><strong id="stat-ideas">0</strong><span>Offene Ideen</span></div><div class="stat"><strong id="stat-projects">0</strong><span>Produktionen</span></div><div class="stat"><strong id="stat-tasks">0</strong><span>Offene Übergaben</span></div><div class="stat"><strong id="stat-assets">0</strong><span>Registrierte Assets</span></div></div>
+      <div class="grid-2"><div class="card"><div class="card-head"><h2>Produktionen</h2><button class="btn small ghost" data-go="projects">Alle ansehen</button></div><div id="home-projects"></div></div><div class="card"><div class="card-head"><h2>Produktionsprotokoll</h2></div><div id="home-events"></div></div></div>
+      <div class="warning">Beweisregel: Ein Repository-Link ist kein getesteter Build. Ein registriertes Asset ist keine validierte GLB-Datei. Die Freigaben in diesem MVP sind manuelle Vermerke.</div>
+    </section>
+    <section class="view" id="view-ideas" hidden>
+      <div class="section-title"><div><h2>Kreative Entwicklung</h2><p class="sub">Film, Game und VR beginnen im selben Ideenlabor.</p></div></div>
+      <div class="grid-2"><div><div class="card"><h2>Neue Idee</h2><form id="idea-form"><div class="form-grid"><div class="full"><label for="idea-title">Arbeitstitel</label><input id="idea-title" name="title" required maxlength="120" placeholder="z. B. Die letzte Stadt"></div><div class="full"><label for="idea-medium">Medium</label><select name="medium" id="idea-medium"><option value="shared">Film + Game / medienübergreifend</option><option value="game">Videospiel</option><option value="film">Film</option><option value="vr">VR / 3D-Erfahrung</option></select></div><div class="full"><label for="idea-description">Prämisse / Spielerfahrung</label><textarea name="description" id="idea-description" required maxlength="1500" placeholder="Was ist neu? Was erlebt das Publikum?"></textarea></div></div><div class="btn-row"><button class="btn primary" type="submit">Idee speichern</button></div></form></div></div><div class="card"><h2>Ideenarchiv</h2><div id="idea-list"></div></div></div>
+    </section>
+    <section class="view" id="view-projects" hidden><div class="section-title"><div><h2>Produktionsportfolio</h2><p class="sub">Verlinkte Repositories und Projekte aus dem Ideenlabor.</p></div></div><div id="project-list" class="grid-2"></div></section>
+    <section class="view" id="view-tasks" hidden>
+      <div class="section-title"><div><h2>Abteilungsübergaben</h2><p class="sub">Ein klarer Auftrag, ein Liefergegenstand, ein überprüfbarer Nachweis.</p></div></div>
+      <div class="grid-2"><div><div class="card"><h2>Neue Übergabe</h2><form id="task-form"><div class="form-grid"><div class="full"><label for="task-project">Produktion</label><select name="projectId" id="task-project"></select></div><div class="full"><label for="task-title">Auftrag</label><input id="task-title" name="title" maxlength="120" required placeholder="z. B. Schlossmodell erstellen"></div><div><label for="task-from">Von</label><select name="from" id="task-from"></select></div><div><label for="task-to">An</label><select name="to" id="task-to"></select></div><div class="full"><label for="task-deliverable">Erwarteter Liefergegenstand</label><textarea name="deliverable" id="task-deliverable" required maxlength="1200" placeholder="Dateiformat, Qualitätsmaßstab, Belege ..."></textarea></div></div><div class="btn-row"><button class="btn primary" type="submit">Übergabe erstellen</button></div></form></div></div><div class="card"><h2>Auftragsboard</h2><div id="task-list"></div></div></div>
+    </section>
+    <section class="view" id="view-assets" hidden><div class="section-title"><div><h2>Asset Registry</h2><p class="sub">Eine Quelle, eine Versions- oder Datei-Referenz, eine verantwortliche Prüfung.</p></div></div><div class="grid-2"><div class="card"><h2>Asset registrieren</h2><form id="asset-form"><div class="form-grid"><div class="full"><label for="asset-project">Produktion</label><select name="projectId" id="asset-project"></select></div><div><label for="asset-name">Assetname</label><input id="asset-name" name="name" required maxlength="120"></div><div><label for="asset-format">Format</label><select name="format" id="asset-format"><option>.glb</option><option>.usd</option><option>.blend</option><option>.vrm</option><option>.mp4</option><option>.png</option><option>anderes</option></select></div><div class="full"><label for="asset-location">Datei- oder Repository-Verweis</label><input id="asset-location" name="location" required maxlength="1000" placeholder="https://… oder assets/scene.glb"></div><div class="full"><label for="asset-license">Herkunft / Lizenz</label><input id="asset-license" name="license" required maxlength="200" placeholder="Eigene Produktion / CC BY 4.0 / ..."></div></div><div class="btn-row"><button class="btn primary" type="submit">Asset registrieren</button></div></form></div><div class="card"><h2>Asset-Katalog</h2><div id="asset-list"></div></div></div></section>
+    <section class="view" id="view-data" hidden><div class="section-title"><div><h2>Daten & Übergabe</h2><p class="sub">Für diesen MVP ist JSON die transportable Studiowahrheit.</p></div></div><div class="card"><h2>Export / Import</h2><p class="sub">Änderungen werden im Browser gespeichert. Ein JSON-Export ist die einzige dauerhafte, geräteübergreifende Sicherung. Beim Import wird der komplette lokale Datenstand ersetzt.</p><div class="btn-row" style="margin-top:23px"><button id="export-btn" class="btn primary">Daten als JSON sichern</button><label for="import-file" class="btn ghost" style="margin:0;cursor:pointer">JSON importieren</label><input id="import-file" type="file" accept=".json,application/json" hidden></div><p class="notice">Ohne Backend kein Team-Sync. Keine automatische Übertragung an andere Chats oder in GitHub Issues. Übergaben können als JSON kopiert werden.</p></div><div class="warning">Bitte keine vertraulichen Inhalte in öffentlich zugängliche Repositories übertragen. Im MVP werden diese Daten lokal im Browser aufbewahrt.</div></section>
+    <div class="footer">MOTHERSHIP STUDIO OS · MVP 0.1 · Offen nachvollziehbare Arbeit statt simuliertem Fortschritt.</div>
+  </main>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script src="studio/core.js"></script>
+<script src="studio/app.js"></script>
+</body>
+</html>
